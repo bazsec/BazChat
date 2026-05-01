@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: GPL-2.0-or-later
 ---------------------------------------------------------------------------
 -- BazChat
 -- Chat enhancements for the Baz Suite. Hooks into Blizzard's default

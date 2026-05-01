@@ -1,0 +1,57 @@
+## Interface: 120005
+## Title: BazChat
+## Notes: A modern, polished chat replacement that mirrors Blizzard's default, with copy-paste, compact channels, and timestamps.
+## Author: Baz4k
+## Version: 001
+## X-License: GPL v2
+## Category: Baz Suite
+## X-Category: Chat & Communication
+## X-Curse-Project-ID: 1530174
+## Dependencies: BazCore
+## IconTexture: 2056011
+## SavedVariables: BazChatDB
+
+# Core - addon registration, slash commands, module registry, shared
+# chat-frame helpers. The module-registry pattern is kept around for
+# Phase 9 (post-replica) features even though it's empty in Phase 1.
+Core\Init.lua
+Core\Modules.lua
+Core\Frames.lua
+
+# Replica - Path B: own the chat frames end-to-end. Each module is
+# focused on one concern; Window.lua is the lifecycle root that
+# composes them into a working chat window.
+#   HideDefault   - hide Blizzard's default chat scaffolding
+#   BazChat.xml   - frame templates (BazChatFrameTemplate, etc.)
+#   Chrome.lua    - NineSlice frame chrome
+#   Tabs.lua      - shared TabSystem strip, chat-type binding, Trade detect
+#   AutoHide.lua  - tri-state fade for scrollbar + tab strip
+#   Channels.lua    - per-tab channel routing + right-click channel popup
+#   Persistence.lua - chat history saved across /reload + relog
+#   Window.lua      - SMF lifecycle, dock, ApplySettings (composes the above)
+#   History.lua     - persistent typed-message up/down arrow history
+#   TabDrag.lua     - hold-2s drag-to-reorder for tabs
+#   Init.lua        - bootstrap on PLAYER_LOGIN
+Replica\HideDefault.lua
+Replica\BazChat.xml
+Replica\Chrome.lua
+Replica\Tabs.lua
+Replica\AutoHide.lua
+Replica\Channels.lua
+Replica\Persistence.lua
+Replica\Timestamps.lua
+Replica\TimestampOverlay.lua
+Replica\ChannelNames.lua
+Replica\SettingsSpec.lua
+Replica\Window.lua
+Replica\History.lua
+Replica\TabDrag.lua
+Replica\CopyChat.lua
+Replica\Init.lua
+
+# Options + docs (Settings page will be reworked for Phase 8 once
+# windows + tabs + profiles are in - the existing layout is harmless
+# for now since the underlying DB defaults still match)
+Options\Settings.lua
+Options\TabsPage.lua
+UserGuide.lua

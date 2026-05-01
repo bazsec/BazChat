@@ -1,5 +1,14 @@
 # BazChat changelog
 
+## 003 — Unified popup primitive
+
+Replaced BazChat's two hand-rolled `StaticPopupDialogs` confirms with the new `BazCore:Confirm` primitive (BazCore v089). Both popups now match the rest of the BazCore UI — same fonts, buttons, backdrop — instead of inheriting Blizzard's default StaticPopup styling, which looked out of place sitting on top of a BazChat window.
+
+- **Delete tab confirm** — right-click → Delete on any tab beyond General now uses the unified popup with a destructive (red) "Delete" button
+- **Reset tabs confirm** — Tabs page → "Reset Tabs to Defaults" panic button uses the same primitive with a destructive "Reset" button
+
+Requires BazCore 089+.
+
 ## 002 — Default settings tuned
 
 Tuned the out-of-the-box defaults so the addon looks polished on first install rather than feeling like a wireframe. New users (and anyone who runs `/bc reset`) get:

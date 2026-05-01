@@ -282,29 +282,26 @@ BazCore:QueueForLogin(function()
         -- modes) so resetting doesn't nuke unrelated preferences.
         resetButtonText = "Reset Tabs to Defaults",
         onReset = function()
-            StaticPopup_Show("BAZCHAT_CONFIRM_RESET_TABS")
-        end,
-    })
-
-    -- Reset confirmation dialog (registered once, reused).
-    StaticPopupDialogs["BAZCHAT_CONFIRM_RESET_TABS"] = {
-        text         = "Reset all chat tabs to defaults? Custom tabs will be removed and the canonical four (General / Guild / Trade / Log) will be restored. Reload follows.",
-        button1      = ACCEPT,
-        button2      = CANCEL,
-        OnAccept     = function()
-            if addon.Tabs and addon.Tabs.ResetTabsToDefaults
-               and addon.Tabs:ResetTabsToDefaults() then
-                if addon.core then
-                    addon.core:Print(
-                        "|cffffd100tabs reset, reloading...|r")
-                end
-                C_Timer.After(0.1, ReloadUI)
+            if BazCore.Confirm then
+                BazCore:Confirm({
+                    title       = "Reset tabs?",
+                    body        = "Reset all chat tabs to defaults? Custom tabs will be removed and the canonical four (General / Guild / Trade / Log) will be restored. Reload follows.",
+                    acceptLabel = "Reset",
+                    acceptStyle = "destructive",
+                    onAccept    = function()
+                        if addon.Tabs and addon.Tabs.ResetTabsToDefaults
+                           and addon.Tabs:ResetTabsToDefaults() then
+                            if addon.core then
+                                addon.core:Print(
+                                    "|cffffd100tabs reset, reloading...|r")
+                            end
+                            C_Timer.After(0.1, ReloadUI)
+                        end
+                    end,
+                })
             end
         end,
-        timeout      = 0,
-        whileDead    = true,
-        hideOnEscape = true,
-    }
+    })
 
     BazCore:RegisterOptionsTable(PAGE_KEY, builder)
     BazCore:AddToSettings(PAGE_KEY, "Tabs", addonName)

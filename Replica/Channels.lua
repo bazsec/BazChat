@@ -539,20 +539,9 @@ local function ColWidth()
     return (POPUP_WIDTH - LEFT_PAD * 2 - COL_GAP * (NUM_COLS - 1)) / NUM_COLS
 end
 
--- Static popup for delete confirmation. Registered once, reused.
-StaticPopupDialogs["BAZCHAT_CONFIRM_DELETE_TAB"] = {
-    text         = "Delete the '%s' tab?",
-    button1      = ACCEPT,
-    button2      = CANCEL,
-    OnAccept     = function(self, data)
-        if addon.Tabs and addon.Tabs.DeleteTab then
-            addon.Tabs:DeleteTab(data)   -- live cleanup, no reload needed
-        end
-    end,
-    timeout      = 0,
-    whileDead    = true,
-    hideOnEscape = true,
-}
+-- Delete-tab confirmation now uses BazCore:Confirm (native popup
+-- primitive that matches the rest of the BazCore UI - same fonts,
+-- buttons, backdrop). Replaces the old StaticPopupDialogs entry.
 
 -- Read a (r, g, b) tuple from ChatTypeInfo for a given key. Falls back
 -- to white when ChatTypeInfo doesn't have an entry. ChatTypeInfo is a
@@ -655,9 +644,22 @@ local function EnsurePopup()
         if not popup.tabIdx or popup.tabIdx == 1 then return end
         local p = (addon.db and addon.db.profile)
             or (addon.core and addon.core.db and addon.core.db.profile)
-        local ws = p and p.windows and p.windows[popup.tabIdx]
-        StaticPopup_Show("BAZCHAT_CONFIRM_DELETE_TAB",
-            ws and ws.label or ("Tab " .. popup.tabIdx), nil, popup.tabIdx)
+        local ws    = p and p.windows and p.windows[popup.tabIdx]
+        local label = ws and ws.label or ("Tab " .. popup.tabIdx)
+        local idx   = popup.tabIdx
+        if BazCore.Confirm then
+            BazCore:Confirm({
+                title       = "Delete tab?",
+                body        = "Delete the \"" .. label .. "\" tab? This can't be undone.",
+                acceptLabel = "Delete",
+                acceptStyle = "destructive",
+                onAccept    = function()
+                    if addon.Tabs and addon.Tabs.DeleteTab then
+                        addon.Tabs:DeleteTab(idx)
+                    end
+                end,
+            })
+        end
     end)
     popup.deleteBtn = del
 

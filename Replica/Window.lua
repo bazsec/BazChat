@@ -78,10 +78,10 @@ local FALLBACKS = {
     width            = 440,
     height           = 120,
     alpha            = 1.0,
-    bgAlpha          = 1.0,
+    bgAlpha          = 0.75,
     bgMode           = "always",
     tabsAlpha        = 1.0,
-    chromeFadeMode   = "off",
+    chromeFadeMode   = "always",
     scale            = 1.0,
     showScrollbar    = true,
     maxLines         = 500,
@@ -89,6 +89,7 @@ local FALLBACKS = {
     fadeDuration     = 0.5,
     timeVisible      = 120,
     indentedWordWrap = true,
+    messageSpacing   = 3,
 }
 
 -- Safe DB profile accessor. BazCore's onReady (which sets addon.db)
@@ -1068,10 +1069,10 @@ local CANONICAL_WINDOW_DEFAULTS = {
     -- locked removed in v072: lock state now tracks Edit Mode rather
     -- than being a saved per-window setting.
     alpha            = 1.0,
-    bgAlpha          = 1.0,
+    bgAlpha          = 0.75,
     bgMode           = "always",
     tabsAlpha        = 1.0,
-    chromeFadeMode   = "off",
+    chromeFadeMode   = "always",
     scale            = 1.0,
     showScrollbar    = true,
     fading           = true,
@@ -1079,6 +1080,7 @@ local CANONICAL_WINDOW_DEFAULTS = {
     timeVisible      = 120,
     maxLines         = 500,
     indentedWordWrap = true,
+    messageSpacing   = 3,
 }
 
 -- Create all windows. Called from Replica:Start after PLAYER_LOGIN.

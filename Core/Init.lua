@@ -64,7 +64,7 @@ local DEFAULTS = {
             -- bgAlpha = NineSlice chrome panel opacity (the background)
             -- scale   = whole-frame UI scale multiplier
             alpha            = 1.0,
-            bgAlpha          = 1.0,
+            bgAlpha          = 0.75,
             scale            = 1.0,
             -- Tri-state: "always" / "onscroll" / "never". The
             -- legacy `showScrollbar` boolean is kept for backwards
@@ -83,7 +83,7 @@ local DEFAULTS = {
             -- forced to that mode, individual dropdowns greyed out.
             -- The legacy `chromeFadeSync` boolean is migrated to this
             -- field on first load post-upgrade.
-            chromeFadeMode   = "off",
+            chromeFadeMode   = "always",
             -- Tab strip visibility. "always" / "onhover" / "never".
             -- Onhover fades the strip in when the cursor is over the
             -- chat or any tab, holds 2s after the last hover, fades
@@ -104,7 +104,7 @@ local DEFAULTS = {
             -- Affects EVERY visible row boundary - including wrapped
             -- continuations of a single message - so keep small for
             -- a subtle gap (1-3 px is comfortable). 0 = default tight.
-            messageSpacing   = 0,
+            messageSpacing   = 3,
         },
 
         -- Guild tab. Same chrome defaults as General, but only
@@ -136,7 +136,7 @@ local DEFAULTS = {
             -- forced to that mode, individual dropdowns greyed out.
             -- The legacy `chromeFadeSync` boolean is migrated to this
             -- field on first load post-upgrade.
-            chromeFadeMode   = "off",
+            chromeFadeMode   = "always",
             -- Tab strip visibility. "always" / "onhover" / "never".
             -- Onhover fades the strip in when the cursor is over the
             -- chat or any tab, holds 2s after the last hover, fades
@@ -154,7 +154,7 @@ local DEFAULTS = {
             -- Affects EVERY visible row boundary - including wrapped
             -- continuations of a single message - so keep small for
             -- a subtle gap (1-3 px is comfortable). 0 = default tight.
-            messageSpacing   = 0,
+            messageSpacing   = 3,
         },
 
         -- Trade tab. Mirrors default ChatFrame4 (Loot/Trade) - shows
@@ -186,7 +186,7 @@ local DEFAULTS = {
             -- forced to that mode, individual dropdowns greyed out.
             -- The legacy `chromeFadeSync` boolean is migrated to this
             -- field on first load post-upgrade.
-            chromeFadeMode   = "off",
+            chromeFadeMode   = "always",
             -- Tab strip visibility. "always" / "onhover" / "never".
             -- Onhover fades the strip in when the cursor is over the
             -- chat or any tab, holds 2s after the last hover, fades
@@ -204,7 +204,7 @@ local DEFAULTS = {
             -- Affects EVERY visible row boundary - including wrapped
             -- continuations of a single message - so keep small for
             -- a subtle gap (1-3 px is comfortable). 0 = default tight.
-            messageSpacing   = 0,
+            messageSpacing   = 3,
         },
 
         -- Log tab. Subscribes to combat-related events: XP, honor,
@@ -236,7 +236,7 @@ local DEFAULTS = {
             -- forced to that mode, individual dropdowns greyed out.
             -- The legacy `chromeFadeSync` boolean is migrated to this
             -- field on first load post-upgrade.
-            chromeFadeMode   = "off",
+            chromeFadeMode   = "always",
             -- Tab strip visibility. "always" / "onhover" / "never".
             -- Onhover fades the strip in when the cursor is over the
             -- chat or any tab, holds 2s after the last hover, fades
@@ -254,7 +254,7 @@ local DEFAULTS = {
             -- Affects EVERY visible row boundary - including wrapped
             -- continuations of a single message - so keep small for
             -- a subtle gap (1-3 px is comfortable). 0 = default tight.
-            messageSpacing   = 0,
+            messageSpacing   = 3,
         },
     },
 
@@ -309,7 +309,7 @@ local DEFAULTS = {
     -- moment, not "now".
     timestamps = {
         enabled      = true,
-        format       = "%H:%M:%S",
+        format       = "%I:%M %p",
         separator    = "-",
         color        = { 0.55, 0.55, 0.55, 1 },
         -- When true, hovering the gutter timestamp pops a GameTooltip

@@ -1,5 +1,16 @@
 # BazChat changelog
 
+## 002 — Default settings tuned
+
+Tuned the out-of-the-box defaults so the addon looks polished on first install rather than feeling like a wireframe. New users (and anyone who runs `/bc reset`) get:
+
+- **`timestamps.format`** — `%I:%M %p` (12-hour AM/PM, no seconds) instead of `%H:%M:%S`
+- **`windows[*].bgAlpha`** — `0.75` instead of `1.0` (slightly translucent so the world shows through behind the chat)
+- **`windows[*].messageSpacing`** — `3` px instead of `0` (subtle inter-line gap for readability)
+- **`windows[*].chromeFadeMode`** — `"always"` instead of `"off"` (unified bg+tabs visibility, both pinned to always-visible)
+
+Existing users keep their current settings — these only apply to fresh installs or explicit resets.
+
 ## 001 — Initial release
 
 Modern chat replacement for the Baz Suite, built on Blizzard's chat primitives — `ScrollingMessageFrame`, `ChatFrameMixin`, `ChatFrameEditBoxTemplate`, `TabSystemTemplate`. BazChat hides Blizzard's default chat windows and creates its own, owning the lifecycle, tabs, channel filtering, fade modes, persistence, and timestamp rendering end-to-end while preserving the standard message formatter, hyperlinks, edit-box history, BN whisper routing, and combat log.

@@ -108,6 +108,24 @@ function History:Apply(editBox)
                 editBox:AddHistoryLine(text)
             end
         end
+
+        -- Capture slash commands too. The SendChatMessage / C_ChatInfo
+        -- hooks below catch normal chat, but Blizzard's slash-command
+        -- dispatch (ChatEdit_ParseText -> SlashCmdList[...]) bypasses
+        -- SendChatMessage entirely - so /reload, /bbg, /dance and the
+        -- like never reached our typedHistory list. Inside
+        -- ChatEdit_OnEnterPressed, Blizzard calls editBox:AddHistoryLine
+        -- on BOTH chat and slash-command paths (it's what populates the
+        -- editbox's own native cycling buffer), so hooking that method
+        -- on each BazChat editbox catches everything. Add() de-dupes
+        -- consecutive identical entries, so the SendChatMessage path
+        -- still firing alongside this one is harmless.
+        if not editBox._bcHistoryHooked then
+            editBox._bcHistoryHooked = true
+            hooksecurefunc(editBox, "AddHistoryLine", function(_, text)
+                History:Add(text)
+            end)
+        end
     end
 
     -- Per-editbox history cursor. nil = "not currently navigating;"

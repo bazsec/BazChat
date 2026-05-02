@@ -23,6 +23,15 @@ addon.History = History
 -- bit more headroom without exploding the saved-variable file.
 local MAX_LINES = 50
 
+-- Re-entry guard for Add(). When Add() rebuilds the native editbox
+-- history (calls eb:AddHistoryLine for every saved entry), and our
+-- v005 AddHistoryLine hook calls Add() in turn, the rebuild loop
+-- recurses through Add -> AddHistoryLine -> Add ... blowing the
+-- stack and hard-crashing the client. Setting `rebuilding = true`
+-- before the loop and checking it at the top of Add (and in the
+-- AddHistoryLine hook) breaks the cycle.
+local rebuilding = false
+
 -- Same dual-path the other Replica modules use: addon.db is set in
 -- BazCore's onReady (which fires after profile init), but addon.core.db
 -- is populated earlier - so the fallback covers any frame-creation
@@ -53,6 +62,7 @@ end
 --   AddHistoryLine - cheap because the list caps at MAX_LINES (50).
 ---------------------------------------------------------------------------
 function History:Add(text)
+    if rebuilding then return end                  -- crash guard (v006)
     if not text or text == "" then return end
     local list = listRef()
     if not list then return end
@@ -64,6 +74,9 @@ function History:Add(text)
 
     -- Push the canonical list into every live tab's editbox so the
     -- new message is immediately available via up-arrow on any tab.
+    -- The `rebuilding` flag short-circuits the v005 AddHistoryLine
+    -- hook so it doesn't re-enter Add() for each push below.
+    rebuilding = true
     if addon.Window and addon.Window.list then
         for _, win in pairs(addon.Window.list) do
             local eb = win and win.editBox
@@ -75,6 +88,7 @@ function History:Add(text)
             end
         end
     end
+    rebuilding = false
 end
 
 ---------------------------------------------------------------------------
@@ -104,9 +118,16 @@ function History:Apply(editBox)
     if editBox.AddHistoryLine then
         local list = listRef()
         if list then
+            -- Guard the seed loop: the AddHistoryLine hook installed
+            -- below will fire for each call here once it's wired up
+            -- on a re-Apply, and re-entering Add() during a seed
+            -- crashes the same way the rebuild loop did. Setting
+            -- `rebuilding` keeps both paths in sync.
+            rebuilding = true
             for _, text in ipairs(list) do
                 editBox:AddHistoryLine(text)
             end
+            rebuilding = false
         end
 
         -- Capture slash commands too. The SendChatMessage / C_ChatInfo

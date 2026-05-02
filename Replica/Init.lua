@@ -51,10 +51,18 @@ function Replica:Start()
     --     hide one). Hooking AFTER the original runs lets us
     --     re-activate our window-1 editbox if some other editbox
     --     got picked.
-    if not addon._openChatHooked
+    -- Singleton-guard against duplicate hook installs across /reload.
+    -- `addon` is a fresh table every load so a flag on it is nil
+    -- post-reload; the hook would then stack on top of the previous
+    -- session's still-attached hook, and on each subsequent press of
+    -- "/" you'd get one SetText("/") call per stacked hook - which is
+    -- exactly the "//" bug reported. Storing the flag on the
+    -- Blizzard-side ChatFrameUtil table (which persists across
+    -- /reload) keeps the install idempotent forever in this session.
+    if not (ChatFrameUtil and ChatFrameUtil._bazChatOpenChatHooked)
        and ChatFrameUtil and type(ChatFrameUtil.OpenChat) == "function"
     then
-        addon._openChatHooked = true
+        ChatFrameUtil._bazChatOpenChatHooked = true
         hooksecurefunc(ChatFrameUtil, "OpenChat",
             function(text, chatFrame)
                 -- If Blizzard targeted a specific chat frame,
@@ -63,7 +71,16 @@ function Replica:Start()
                 local w = addon.Window and addon.Window:Get(1)
                 if w and w.editBox and ACTIVE_CHAT_EDIT_BOX ~= w.editBox then
                     ChatEdit_ActivateChat(w.editBox)
-                    if text then w.editBox:SetText(text) end
+                    -- Only set text if it differs from what's already
+                    -- in the editbox. Blizzard's original OpenChat may
+                    -- have already prefilled the same text on our
+                    -- editbox (we're DEFAULT_CHAT_FRAME, so its
+                    -- ChooseBoxForSend often picks ours); blindly
+                    -- re-setting concatenates with the cursor position
+                    -- in some Blizzard code paths and produces "//".
+                    if text and (w.editBox:GetText() or "") ~= text then
+                        w.editBox:SetText(text)
+                    end
                 end
             end)
     end

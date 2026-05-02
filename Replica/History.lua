@@ -149,6 +149,28 @@ function History:Apply(editBox)
         end
     end
 
+    -- Robust pre-send capture. The hooks above (C_ChatInfo.SendChatMessage,
+    -- legacy SendChatMessage, editBox:AddHistoryLine) catch the standard
+    -- send paths, but Blizzard occasionally reroutes chat plumbing (recent
+    -- Mixin restructuring of ChatFrameEditBox in 12.x) and a hooksecurefunc
+    -- can silently no-op on a method that's been moved to a different mixin
+    -- table. Wrapping the editbox's OnEnterPressed script gives us a
+    -- guaranteed capture point: we read the text *before* Blizzard's
+    -- handler clears it, then defer to the original. Add() de-dupes
+    -- consecutive identical entries so this firing alongside any of the
+    -- other hooks is harmless.
+    if not editBox._bcEnterHooked then
+        editBox._bcEnterHooked = true
+        local origEnter = editBox:GetScript("OnEnterPressed")
+        editBox:SetScript("OnEnterPressed", function(self, ...)
+            local text = self:GetText()
+            if text and text ~= "" then
+                History:Add(text)
+            end
+            if origEnter then origEnter(self, ...) end
+        end)
+    end
+
     -- Per-editbox history cursor. nil = "not currently navigating;"
     -- a number = "showing entry at that index of the saved list."
     -- Reset on focus-gain + on text-change-from-typing so the user's

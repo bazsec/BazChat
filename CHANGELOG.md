@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 008 — Fix: typed-input history not capturing new messages
+
+Up-arrow chat history was loading saved entries from prior sessions but failing to add new messages typed in the current session. Existing capture went through three hooks (`C_ChatInfo.SendChatMessage`, legacy `SendChatMessage`, and per-editbox `AddHistoryLine`); recent Blizzard refactoring of the `ChatFrameEditBox` mixin tree appears to have moved methods around so that `hooksecurefunc` on the editbox instance silently no-ops in some cases.
+
+Added a guaranteed pre-send capture in `History:Apply`: wrap the editbox's `OnEnterPressed` script so we read `self:GetText()` *before* Blizzard's handler clears it, then defer to the original. Idempotent (`_bcEnterHooked` flag) so it doesn't stack across re-applies. The other three hooks stay in place; `Add()` already de-dupes consecutive identical entries so multiple paths firing for the same message is harmless.
+
 ## 003 — Unified popup primitive
 
 Replaced BazChat's two hand-rolled `StaticPopupDialogs` confirms with the new `BazCore:Confirm` primitive (BazCore v089). Both popups now match the rest of the BazCore UI — same fonts, buttons, backdrop — instead of inheriting Blizzard's default StaticPopup styling, which looked out of place sitting on top of a BazChat window.

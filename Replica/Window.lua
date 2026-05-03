@@ -1,4 +1,3 @@
--- SPDX-License-Identifier: GPL-2.0-or-later
 ---------------------------------------------------------------------------
 -- BazChat Replica: Window
 --
@@ -882,13 +881,17 @@ function Window:Create(index, opts)
     -- in sync with the right-click popup + the Tabs options page.
     if addon.Channels then
         addon.Channels:Subscribe(f, index)
-        -- Manual Guild MOTD recovery for /reload + relog. The actual
-        -- GUILD_MOTD event fired before we registered for it, so we
-        -- fetch the cached value from C_GuildInfo.GetMOTD() and feed
-        -- it to the mixin's display helper. Live MOTD changes still
-        -- come through the registered event normally.
+        -- Manual Guild MOTD recovery on the primary window only. The
+        -- actual GUILD_MOTD event fired before we registered for it
+        -- (during cold login while guild data was still loading), so
+        -- we fetch the cached value from C_GuildInfo.GetMOTD() and
+        -- AddMessage it to window 1. Restricting to window 1 keeps the
+        -- MOTD from showing up multiple times for users who split
+        -- Guild chat to its own tab; window 1 is the user's primary
+        -- view either way. Live MOTD changes during the session still
+        -- come through the registered GUILD_MOTD event normally.
         local wsBlock = WindowDB(index)
-        if wsBlock and addon.Channels.DisplayInitialMOTD then
+        if index == 1 and wsBlock and addon.Channels.DisplayInitialMOTD then
             addon.Channels:DisplayInitialMOTD(f, wsBlock)
         end
     end

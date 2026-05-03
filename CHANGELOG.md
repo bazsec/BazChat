@@ -1,5 +1,15 @@
 # BazChat changelog
 
+## 015 — Guild MOTD: always render on primary window
+
+v014 added direct `AddMessage` rendering for the cold-login MOTD recovery, but `DisplayInitialMOTD` was still bailing when the calling window's `ws.channels.guild` flag was false. Users who split Guild chat to a dedicated tab had `channels.guild = false` on their primary General tab, so MOTD was silently skipped there. Live `GUILD_MOTD` events through the mixin path still routed to the Guild tab correctly, but the cold-login *recovery* didn't surface anywhere visible.
+
+Two changes:
+- `Window.lua` only calls `DisplayInitialMOTD` for window 1 (the primary view).
+- `DisplayInitialMOTD` no longer gates on `ws.channels.guild`. It always renders on the calling frame.
+
+Net result: MOTD displays exactly once on login, on the primary chat window, regardless of the user's per-tab channel routing.
+
 ## 014 — Guild MOTD: pull and display ourselves instead of routing through ChatFrameUtil
 
 v013 still went through `ChatFrameUtil.DisplayGMOTD` which apparently doesn't always render on our replica window in modern WoW. Replaced that call with a direct `frame:AddMessage(...)`: fetch the cached MOTD via `C_GuildInfo.GetMOTD()`, format with `GUILD_MOTD_TEMPLATE` ("Guild Message of the Day: %s"), color from `ChatTypeInfo["GUILD"]` (standard guild green), feed straight into our AddMessage chain. Same retry behavior as v013 (up to 10 attempts at 0.5s intervals to ride out the cold-login guild-data race).

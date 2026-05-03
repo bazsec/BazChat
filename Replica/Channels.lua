@@ -430,7 +430,13 @@ end
 -- required - we just attempt now and let the live event handle the
 -- async case if needed.
 function Channels:DisplayInitialMOTD(f, ws, attempt)
-    if not f or not ws or not ws.channels or not ws.channels.guild then return end
+    -- Always attempts on the calling frame, regardless of its
+    -- ws.channels.guild subscription. The previous gating-by-channel
+    -- meant a user who routed Guild chat to a separate tab never saw
+    -- the MOTD on their primary General tab. Window.lua now only
+    -- calls this for the primary window (index 1), so the message
+    -- shows up exactly once on login.
+    if not f then return end
     if not (C_GuildInfo and C_GuildInfo.GetMOTD) then return end
     if not f.AddMessage then return end
 

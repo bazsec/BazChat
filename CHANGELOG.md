@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 024 — SyncWindow also treats tab-strip hover as chat hover
+
+v023 fixed the polling ticker but missed `SyncWindow`, which is called synchronously on every tab click. SyncWindow checks `f:IsMouseOver()` to decide whether to instant-snap the chrome's alpha to 0 (onhover mode + not hovering) or to the target value. After a tab click the cursor is over the tabs, not the chat content, so SyncWindow set alpha=0 immediately — then the polling ticker (100 ms later) re-pinged it back in over 0.15 s. That was the "fade out and back in really fast" the user reported.
+
+Same OR-with-tabstrip-hover pattern applied to SyncWindow. Tab clicks no longer flash the bg off-and-on.
+
 ## 023 — Fade: tab-strip hover counts as chat hover
 
 When the user clicked a tab to switch, the new active window's polling ticker registered `IsMouseOver()` = false (the cursor was over the tab strip, not the chat content), which set the chrome's `_bcMouseOver` flag false and started the HOLD-then-fade-out timer. The bg faded out over ~2.5s and only faded back in when the cursor crossed into the chat itself.

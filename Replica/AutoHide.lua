@@ -302,7 +302,18 @@ end
 
 function AutoHide:SyncWindow(f)
     if not f then return end
-    local hovering = f.IsMouseOver and f:IsMouseOver() or false
+    -- Treat the tab strip as part of the chat assembly for hover
+    -- purposes - same OR the polling ticker uses (v023). Without this
+    -- a tab click reads "not hovering" because the cursor is over the
+    -- tabs (not the chat content), and SyncWindow snaps the chrome's
+    -- alpha to 0 immediately. The ticker then re-pings it back in
+    -- 100ms later, producing the visible flash/fade-in the user sees
+    -- on every tab switch.
+    local hovering = (f.IsMouseOver and f:IsMouseOver()) or false
+    local ts = addon.Tabs and addon.Tabs.system
+    if not hovering and ts and ts.IsMouseOver and ts:IsMouseOver() then
+        hovering = true
+    end
     local inEdit   = InEditMode()
 
     -- Background chrome

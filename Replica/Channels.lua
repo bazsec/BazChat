@@ -462,10 +462,9 @@ motdListener:RegisterEvent("PLAYER_GUILD_UPDATE")
 motdListener:RegisterEvent("PLAYER_ENTERING_WORLD")
 motdListener._displayed = false
 
-local function RenderMOTDOnWindow1(text)
-    if not text or text == "" then return false end
-    local f = addon.Window and addon.Window.Get and addon.Window:Get(1)
+local function RenderMOTDOnFrame(f, text)
     if not f or not f.AddMessage then return false end
+    if not text or text == "" then return false end
     local info = ChatTypeInfo and ChatTypeInfo["GUILD"]
     local r = (info and info.r) or 0.25
     local g = (info and info.g) or 1.00
@@ -473,6 +472,11 @@ local function RenderMOTDOnWindow1(text)
     local template = _G.GUILD_MOTD_TEMPLATE or "Guild Message of the Day: %s"
     f:AddMessage(string.format(template, text), r, g, b)
     return true
+end
+
+local function RenderMOTDOnWindow1(text)
+    local f = addon.Window and addon.Window.Get and addon.Window:Get(1)
+    return RenderMOTDOnFrame(f, text)
 end
 
 motdListener:SetScript("OnEvent", function(self, event, arg1)
@@ -493,15 +497,17 @@ motdListener:SetScript("OnEvent", function(self, event, arg1)
     end
 end)
 
--- Kept for the existing Window.lua call site, but now a thin wrapper
--- that tries an immediate render on the warm-cache /reload path. The
--- module-scope listener above is the durable mechanism; this is just
--- a synchronous attempt at frame-create time.
+-- Synchronous render on the warm-cache /reload path. Called from
+-- Window:Create BEFORE windows[1] is registered, so we render onto
+-- the passed `f` directly rather than going through addon.Window:Get.
+-- The module-scope listener above is the durable mechanism for cold
+-- login (where GetMOTD() returns "" until the server pushes); this
+-- is the fast path on /reload when the cache is warm.
 function Channels:DisplayInitialMOTD(f, ws)
     if motdListener._displayed then return end
     if not (IsInGuild and IsInGuild()) then return end
     if not (C_GuildInfo and C_GuildInfo.GetMOTD) then return end
-    if RenderMOTDOnWindow1(C_GuildInfo.GetMOTD()) then
+    if RenderMOTDOnFrame(f, C_GuildInfo.GetMOTD()) then
         motdListener._displayed = true
         motdListener:UnregisterAllEvents()
     end

@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 027 — Guild MOTD: synchronous /reload path uses passed frame, not Window:Get(1)
+
+v026's listener path was correct for cold login (where `GUILD_MOTD` fires async) but broke the warm-cache /reload path. `Window:Create` calls `Channels:DisplayInitialMOTD(f, ws)` at line 895 *before* `windows[index] = f` at line 905. The synchronous helper called `RenderMOTDOnWindow1` which looked up `addon.Window:Get(1)` — that returned nil because the windows table didn't yet have index 1 — so the render silently failed. Result: MOTD missing on /reload.
+
+Split the renderer into `RenderMOTDOnFrame(f, text)` and `RenderMOTDOnWindow1(text)`. The synchronous `DisplayInitialMOTD` now uses `RenderMOTDOnFrame` with the frame `f` already passed in by `Window:Create`, sidestepping the timing issue. The async listener path keeps using `RenderMOTDOnWindow1` since by the time events fire, `windows[1]` is registered.
+
 ## 026 — Guild MOTD: reuse named listener frame across /reload
 
 v017's module-scope MOTD listener used a Lua-local variable to hold the frame: `local motdListener = motdListener or CreateFrame("Frame")`. After `/reload`, the local resets to nil but the OLD frame from the previous session persists (WoW frames live for the session, not the addon-load). The OLD frame's `GUILD_MOTD` registration is still active, the OLD frame's `OnEvent` (now pointing at a stale closure) still fires, and so does the NEW listener we just created. Two listeners firing → two `RenderMOTDOnWindow1` calls → MOTD displayed twice. Three listeners after two `/reload`s, etc.

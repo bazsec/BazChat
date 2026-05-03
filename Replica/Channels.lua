@@ -1,4 +1,3 @@
--- SPDX-License-Identifier: GPL-2.0-or-later
 ---------------------------------------------------------------------------
 -- BazChat Replica: Channels (per-tab routing + right-click popup)
 --
@@ -430,14 +429,29 @@ end
 -- catches it via the normal mixin path, so deferring isn't strictly
 -- required - we just attempt now and let the live event handle the
 -- async case if needed.
-function Channels:DisplayInitialMOTD(f, ws)
+function Channels:DisplayInitialMOTD(f, ws, attempt)
     if not f or not ws or not ws.channels or not ws.channels.guild then return end
-    if not (IsInGuild and IsInGuild()) then return end
     if not (C_GuildInfo and C_GuildInfo.GetMOTD) then return end
     if not (ChatFrameUtil and ChatFrameUtil.DisplayGMOTD) then return end
-    local motd = C_GuildInfo.GetMOTD()
+
+    -- IsInGuild() and GetMOTD() can both return falsy/empty at the
+    -- moment Replica:Start runs (PLAYER_LOGIN fires before guild data
+    -- has finished loading on a cold login). Retry up to ~5 seconds so
+    -- a slightly slow guild-data load still gets the MOTD displayed.
+    -- Live GUILD_MOTD events still hit the normal mixin path so a
+    -- /gmotd change later in the session shows up regardless.
+    attempt = attempt or 1
+    local inGuild = IsInGuild and IsInGuild()
+    local motd = inGuild and C_GuildInfo.GetMOTD() or nil
     if motd and motd ~= "" then
         ChatFrameUtil.DisplayGMOTD(f, motd)
+        return
+    end
+
+    if attempt < 10 then
+        C_Timer.After(0.5, function()
+            self:DisplayInitialMOTD(f, ws, attempt + 1)
+        end)
     end
 end
 

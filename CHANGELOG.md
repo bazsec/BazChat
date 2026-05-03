@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 013 — Fix: Guild MOTD missing after /reload + cold login
+
+`Channels:DisplayInitialMOTD` ran once at window-create time (during `Replica:Start` at PLAYER_LOGIN), which is too early on a cold login — `IsInGuild()` and `C_GuildInfo.GetMOTD()` haven't returned valid data yet, so the MOTD recovery silently bailed. Live `GUILD_MOTD` events for `/gmotd` changes still worked since they hit the subscribed mixin, but the *cached* MOTD from session start was lost.
+
+Added a retry loop: up to 10 attempts at 0.5s intervals (~5 seconds total) until guild data is available, then `ChatFrameUtil.DisplayGMOTD` fires once. Bails immediately if the user isn't in a guild.
+
 ## 012 — Drop redundant per-addon load print + fix UP returning post-parse form
 
 Two changes:

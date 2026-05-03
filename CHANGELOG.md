@@ -1,5 +1,9 @@
 # BazChat changelog
 
+## 016 — Guild MOTD: event-driven render
+
+Replaced the polling retry in `DisplayInitialMOTD` with an event-driven listener: the function now tries an immediate `C_GuildInfo.GetMOTD()` (covers `/reload` warm-data path), and if that returns empty it registers a one-shot listener for `GUILD_MOTD` (server pushes during guild-data load), `PLAYER_GUILD_UPDATE` (guild membership finalised), and `PLAYER_ENTERING_WORLD` (final fallback). First event with non-empty MOTD renders, listener tears itself down. More reliable than the previous 5-second polling window on slow cold logins. v015's "primary window only" routing is preserved.
+
 ## 015 — Guild MOTD: always render on primary window
 
 v014 added direct `AddMessage` rendering for the cold-login MOTD recovery, but `DisplayInitialMOTD` was still bailing when the calling window's `ws.channels.guild` flag was false. Users who split Guild chat to a dedicated tab had `channels.guild = false` on their primary General tab, so MOTD was silently skipped there. Live `GUILD_MOTD` events through the mixin path still routed to the Guild tab correctly, but the cold-login *recovery* didn't surface anywhere visible.

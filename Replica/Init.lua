@@ -115,10 +115,10 @@ function Replica:Start()
 
     started = true
 
-    if addon.core then
-        addon.core:Print(string.format("|cff8ce0ffv%s loaded.|r",
-            tostring(addon.VERSION or "?")))
-    end
+    -- (BazChat used to print its own "vXXX loaded" line here. As of
+    -- BazCore v102 the suite-wide welcome message at PLAYER_LOGIN
+    -- already includes every loaded Baz addon + its version, so this
+    -- per-addon print is redundant.)
 end
 
 function Replica:Stop()

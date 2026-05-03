@@ -1,5 +1,19 @@
 # BazChat changelog
 
+## 012 — Drop redundant per-addon load print + fix UP returning post-parse form
+
+Two changes:
+
+**1. UP arrow returning post-parse form ("hi") instead of typed input ("/say hi")**
+
+v009 dropped the `AddHistoryLine` hook and added an `OnEnterPressed` pre-hook that captures the editbox's raw text before Blizzard's parser runs. That alone is correct — but the `C_ChatInfo.SendChatMessage` and legacy `SendChatMessage` hooks were still firing as redundancy, and they receive the *post-parse* text. Blizzard's `ProcessChatType` rewrites the editbox from "/say hi" to "hi" and changes the chat type, then `SendText` calls `C_ChatInfo.SendChatMessage("hi", "SAY", ...)`. Net result: typing "/say hi" added two entries — the raw "/say hi" from the pre-hook, then "hi" from the SendChatMessage hook. UP returned "hi" even though the user expected "/say hi" back.
+
+Dropped both `SendChatMessage` hooks. Capture now lives entirely in `History:Apply`'s per-editbox `OnEnterPressed` pre-hook, which gives us the user's actual typed input regardless of which send path Blizzard takes.
+
+**2. Drop redundant per-addon load print**
+
+BazCore v102 prints a unified "BazCore vXXX, BazBars vYYY, BazChat vZZZ, ..." welcome line on login that already includes BazChat. Removed the BazChat-specific "vXXX loaded." print so the user sees one line for the whole suite instead of one suite-line plus a duplicate BazChat-line.
+
 ## 011 — Stop calling SetText ourselves on OpenChat (real "//" fix)
 
 v010 cleared `editbox.setText`/`editbox.text` to suppress Blizzard's deferred path, then called `SetText` ourselves. That still produced "//" — the literal "/" keypress also fires `OnChar` on our editbox when it gains focus mid-press, and our explicit `SetText("/")` landed on top of that delivery (or vice versa) producing two slashes. The fix is to stop calling `SetText` at all and let Blizzard's deferred `OnUpdate` path own the text application, in sync with the keypress consumption.

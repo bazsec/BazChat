@@ -245,32 +245,25 @@ function History:Apply(editBox)
 end
 
 ---------------------------------------------------------------------------
--- Capture hook. Only registered once.
+-- Install
+--
+-- All capture happens through History:Apply (the OnEnterPressed pre-hook
+-- on each BazChat editbox), which reads the raw editbox text *before*
+-- Blizzard's ParseText runs. That gives us the user's actual typed input
+-- (e.g. "/say hi", or "/dance", or just "hi") regardless of which send
+-- path Blizzard takes after parsing.
+--
+-- Earlier versions also hooked C_ChatInfo.SendChatMessage and the
+-- legacy SendChatMessage as redundancy, but those fire with the
+-- POST-parse text (Blizzard's ProcessChatType rewrites the editbox
+-- text from "/say hi" to "hi" and changes the chat type, then SendText
+-- calls C_ChatInfo.SendChatMessage("hi", "SAY", ...)). Adding both the
+-- raw "/say hi" and the post-parse "hi" produced two history entries
+-- per send and pressing UP returned the post-parse entry even though
+-- the user expected their typed form. Dropping those hooks keeps the
+-- list aligned with what the user actually typed.
 ---------------------------------------------------------------------------
 
-local hooked = false
 function History:Install()
-    if hooked then return end
-    hooked = true
-
-    -- Modern WoW retail dispatches every chat-send through
-    -- C_ChatInfo.SendChatMessage(text, chatType, languageID, target).
-    -- The legacy global SendChatMessage is rarely (if ever) called by
-    -- Blizzard's own chat code anymore - hooking ONLY that left
-    -- typedHistory permanently empty, which is why arrow-key history
-    -- never had anything to cycle through. Hook both for safety: the
-    -- C_ChatInfo path catches everything Blizzard sends, the global
-    -- catches anything an older addon still routes through it. Add()
-    -- de-dupes consecutive identical entries so a single send-event
-    -- only ever lands once even if both paths fire.
-    if C_ChatInfo and C_ChatInfo.SendChatMessage then
-        hooksecurefunc(C_ChatInfo, "SendChatMessage", function(text)
-            History:Add(text)
-        end)
-    end
-    if type(_G.SendChatMessage) == "function" then
-        hooksecurefunc("SendChatMessage", function(text)
-            History:Add(text)
-        end)
-    end
+    -- nothing to do; capture lives in History:Apply per editbox.
 end

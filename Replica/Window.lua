@@ -1164,6 +1164,15 @@ function Window:CreateAll()
     if addon.TabDrag and addon.Tabs and addon.Tabs.system then
         addon.TabDrag:LoadOrder(addon.Tabs.system)
     end
+
+    -- Initial Guild MOTD render. Called HERE rather than from inside
+    -- Window:Create because TryRenderInitialMOTD looks up windows[1]
+    -- via addon.Window:Get(1), and that table isn't populated until
+    -- Window:Create returns. By moving the call here we guarantee
+    -- windows[1] is available when GetMOTD() is queried.
+    if addon.Channels and addon.Channels.TryRenderInitialMOTD then
+        addon.Channels:TryRenderInitialMOTD()
+    end
 end
 
 function Window:AddMessage(windowIdx, text, r, g, b, messageId, holdTime)

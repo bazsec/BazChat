@@ -497,20 +497,33 @@ motdListener:SetScript("OnEvent", function(self, event, arg1)
     end
 end)
 
--- Synchronous render on the warm-cache /reload path. Called from
--- Window:Create BEFORE windows[1] is registered, so we render onto
--- the passed `f` directly rather than going through addon.Window:Get.
--- The module-scope listener above is the durable mechanism for cold
--- login (where GetMOTD() returns "" until the server pushes); this
--- is the fast path on /reload when the cache is warm.
-function Channels:DisplayInitialMOTD(f, ws)
+-- Called from Window:CreateAll after every window is built and
+-- registered in windows[]. On /reload the GUILD_MOTD event doesn't
+-- re-fire (the server doesn't re-push cached data), so the listener
+-- alone never fires - we have to query GetMOTD() ourselves and AddMessage
+-- it. We do this AFTER CreateAll instead of inside Window:Create so that
+-- windows[1] is already populated when we look it up.
+--
+-- Cold login still goes through the listener: GetMOTD() returns "" at
+-- PLAYER_LOGIN time (server hasn't pushed yet), so this returns false,
+-- _displayed stays false, and the GUILD_MOTD event later catches it.
+function Channels:TryRenderInitialMOTD()
     if motdListener._displayed then return end
-    if not (IsInGuild and IsInGuild()) then return end
     if not (C_GuildInfo and C_GuildInfo.GetMOTD) then return end
-    if RenderMOTDOnFrame(f, C_GuildInfo.GetMOTD()) then
+    local motd = C_GuildInfo.GetMOTD()
+    if RenderMOTDOnWindow1(motd) then
         motdListener._displayed = true
         motdListener:UnregisterAllEvents()
     end
+end
+
+-- Backwards compat for any external callers; the new call site is
+-- Window:CreateAll, but Window:Create still invokes this for window 1
+-- on initial creation. Now safe to ignore _f and use Window:Get(1)
+-- because we ALSO call TryRenderInitialMOTD from CreateAll's tail,
+-- which runs after windows[] is populated.
+function Channels:DisplayInitialMOTD(_f, _ws)
+    self:TryRenderInitialMOTD()
 end
 
 function Channels:RefreshChannelList(f, ws)

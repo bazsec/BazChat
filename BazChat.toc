@@ -2,7 +2,7 @@
 ## Title: BazChat
 ## Notes: A modern, polished chat replacement that mirrors Blizzard's default, with copy-paste, compact channels, and timestamps.
 ## Author: Baz4k
-## Version: 027
+## Version: 028
 ## X-License: GPL v2
 ## Category: Baz Suite
 ## X-Category: Chat & Communication

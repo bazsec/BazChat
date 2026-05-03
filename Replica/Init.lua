@@ -64,48 +64,45 @@ function Replica:Start()
     then
         ChatFrameUtil._bazChatOpenChatHooked = true
         hooksecurefunc(ChatFrameUtil, "OpenChat",
-            function(text, chatFrame)
+            function(text, chatFrame, desiredCursorPosition)
                 -- If Blizzard targeted a specific chat frame,
                 -- respect that. Otherwise force ours.
                 if chatFrame ~= nil then return end
                 local w = addon.Window and addon.Window:Get(1)
                 if not w or not w.editBox then return end
 
-                -- Force our editbox active when Blizzard didn't pick
-                -- it (ChooseBoxForSend can return a stale hidden
-                -- editbox even though we own DEFAULT_CHAT_FRAME).
-                if ACTIVE_CHAT_EDIT_BOX ~= w.editBox then
-                    ChatEdit_ActivateChat(w.editBox)
+                -- Don't call SetText ourselves. Blizzard's OpenChat
+                -- already stamped editbox.text + editbox.setText = 1
+                -- on whichever editbox ChooseBoxForSend returned, and
+                -- ChatFrameEditBoxMixin:OnUpdate applies that exactly
+                -- once on the next frame. Any extra SetText we layer
+                -- on top of that path lands on top of the OnChar
+                -- delivery from the literal "/" keypress (which fires
+                -- when our editbox gains focus mid-press), producing
+                -- "//". Letting Blizzard's deferred path own the
+                -- application keeps the SetText timing in sync with
+                -- the keypress consumption. We just have to make sure
+                -- the deferred state lives on OUR editbox, not on a
+                -- different one ChooseBoxForSend may have picked.
+                if ACTIVE_CHAT_EDIT_BOX == w.editBox then
+                    return -- Blizzard picked ours; nothing to do
                 end
 
-                -- Blizzard's OpenChat sets editbox.text and
-                -- editbox.setText = 1 on the editbox returned by
-                -- ChooseBoxForSend so ChatFrameEditBoxMixin:OnUpdate
-                -- can apply the text on the next frame. The previous
-                -- (v007) dedupe fix tried to suppress our SetText when
-                -- the text already matched, but that fired AFTER the
-                -- deferred OnUpdate in some sequences and the cursor-
-                -- position interaction on a re-SetText could still
-                -- produce "//" after a /reload. Clearing the deferred
-                -- flags on every BazChat editbox inside our hook
-                -- guarantees the OnUpdate path can't fire a second
-                -- SetText behind our back: we apply the text exactly
-                -- once here and own the result.
-                if addon.Window and addon.Window.list then
-                    for _, win in pairs(addon.Window.list) do
-                        local eb = win and win.editBox
-                        if eb then
-                            eb.setText = 0
-                            eb.text = nil
-                        end
-                    end
-                end
+                local prevActive = ACTIVE_CHAT_EDIT_BOX
+                ChatEdit_ActivateChat(w.editBox)
 
+                -- Move the deferred-text state from the editbox
+                -- Blizzard had picked over to ours, then clear the
+                -- previous one so its OnUpdate doesn't also fire a
+                -- SetText next frame.
                 if text then
-                    w.editBox:SetText(text)
-                    if w.editBox.SetCursorPosition then
-                        w.editBox:SetCursorPosition(#text)
-                    end
+                    w.editBox.text = text
+                    w.editBox.setText = 1
+                    w.editBox.desiredCursorPosition = desiredCursorPosition or #text
+                end
+                if prevActive then
+                    prevActive.text = nil
+                    prevActive.setText = 0
                 end
             end)
     end

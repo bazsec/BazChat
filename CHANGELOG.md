@@ -1,5 +1,15 @@
 # BazChat changelog
 
+## 011 — Stop calling SetText ourselves on OpenChat (real "//" fix)
+
+v010 cleared `editbox.setText`/`editbox.text` to suppress Blizzard's deferred path, then called `SetText` ourselves. That still produced "//" — the literal "/" keypress also fires `OnChar` on our editbox when it gains focus mid-press, and our explicit `SetText("/")` landed on top of that delivery (or vice versa) producing two slashes. The fix is to stop calling `SetText` at all and let Blizzard's deferred `OnUpdate` path own the text application, in sync with the keypress consumption.
+
+`OpenChat` hook now:
+- If `ACTIVE_CHAT_EDIT_BOX` is already our editbox: do nothing (Blizzard picked us; deferred path applies the text correctly).
+- Otherwise: activate our editbox, copy the deferred-text state (`editbox.text` + `editbox.setText = 1` + `desiredCursorPosition`) onto ours, clear those flags on the previously active editbox so its `OnUpdate` doesn't also run a SetText.
+
+Net effect: `SetText` runs exactly once per `OpenChat`, on our editbox, on the next frame. No extra slashes from explicit calls layered on top of `OnChar`.
+
 ## 010 — Fix: pressing "/" after /reload entered "//"
 
 The v007 dedupe (only `SetText` when current text differs from target) wasn't fully covering Blizzard's deferred-text path. `ChatFrameUtil.OpenChat` stores `editbox.text = "/"` and `editbox.setText = 1`, then `ChatFrameEditBoxMixin:OnUpdate` applies the SetText on the next frame. Our hook ran synchronously and set the text immediately; on the next frame the `setText=1` path then ran `SetText(self.text)` *again*, and in some cursor states that produced "//".

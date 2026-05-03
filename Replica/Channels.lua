@@ -429,65 +429,71 @@ end
 -- catches it via the normal mixin path, so deferring isn't strictly
 -- required - we just attempt now and let the live event handle the
 -- async case if needed.
+-- Module-scoped MOTD listener. Created once, runs through the session
+-- until it successfully displays the cached/initial Guild MOTD on
+-- window 1, then tears itself down. Listens for three events to cover
+-- cold login, /reload, and zone changes:
+--   * GUILD_MOTD            - server pushes the MOTD (cold login or
+--                             /gmotd change). arg1 is the text.
+--   * PLAYER_GUILD_UPDATE   - guild membership data finalised; we can
+--                             re-fetch C_GuildInfo.GetMOTD().
+--   * PLAYER_ENTERING_WORLD - belt-and-braces fallback in case neither
+--                             of the above fires (e.g. silent retail
+--                             builds where the GUILD_MOTD event isn't
+--                             dispatched on a /reload that already has
+--                             warm cache).
+--
+-- Resolves window 1 lazily inside the event handler so the listener
+-- can outlast Window:CreateAll if the events fire early.
+local motdListener = motdListener or CreateFrame("Frame")
+motdListener:UnregisterAllEvents()
+motdListener:RegisterEvent("GUILD_MOTD")
+motdListener:RegisterEvent("PLAYER_GUILD_UPDATE")
+motdListener:RegisterEvent("PLAYER_ENTERING_WORLD")
+motdListener._displayed = false
+
+local function RenderMOTDOnWindow1(text)
+    if not text or text == "" then return false end
+    local f = addon.Window and addon.Window.Get and addon.Window:Get(1)
+    if not f or not f.AddMessage then return false end
+    local info = ChatTypeInfo and ChatTypeInfo["GUILD"]
+    local r = (info and info.r) or 0.25
+    local g = (info and info.g) or 1.00
+    local b = (info and info.b) or 0.25
+    local template = _G.GUILD_MOTD_TEMPLATE or "Guild Message of the Day: %s"
+    f:AddMessage(string.format(template, text), r, g, b)
+    return true
+end
+
+motdListener:SetScript("OnEvent", function(self, event, arg1)
+    if self._displayed then return end
+
+    local motd
+    if event == "GUILD_MOTD" then
+        motd = arg1
+    else
+        if IsInGuild and IsInGuild() and C_GuildInfo and C_GuildInfo.GetMOTD then
+            motd = C_GuildInfo.GetMOTD()
+        end
+    end
+
+    if RenderMOTDOnWindow1(motd) then
+        self._displayed = true
+        self:UnregisterAllEvents()
+    end
+end)
+
+-- Kept for the existing Window.lua call site, but now a thin wrapper
+-- that tries an immediate render on the warm-cache /reload path. The
+-- module-scope listener above is the durable mechanism; this is just
+-- a synchronous attempt at frame-create time.
 function Channels:DisplayInitialMOTD(f, ws)
-    -- Always attempts on the calling frame, regardless of its
-    -- ws.channels.guild subscription. The previous gating-by-channel
-    -- meant a user who routed Guild chat to a separate tab never saw
-    -- the MOTD on their primary General tab. Window.lua now only
-    -- calls this for the primary window (index 1), so the message
-    -- shows up exactly once on login.
-    if not f or not f.AddMessage then return end
-
-    -- Self-contained MOTD display. v012-014 chained polling +
-    -- ChatFrameUtil.DisplayGMOTD; both turned out to be unreliable on
-    -- cold logins where guild data races against PLAYER_LOGIN. The
-    -- robust signal is the GUILD_MOTD event itself (fires when the
-    -- server pushes the MOTD during guild-data load) plus
-    -- PLAYER_GUILD_UPDATE (fires when guild membership data is
-    -- finalised). Listen for both, render on first non-empty MOTD.
-    -- Try once synchronously in case data is already warm (/reload
-    -- path); register a one-shot listener if not.
-
-    local rendered = false
-    local function render(text)
-        if rendered or not text or text == "" then return end
-        local info = ChatTypeInfo and ChatTypeInfo["GUILD"]
-        local r = (info and info.r) or 0.25
-        local g = (info and info.g) or 1.00
-        local b = (info and info.b) or 0.25
-        local template = _G.GUILD_MOTD_TEMPLATE
-            or "Guild Message of the Day: %s"
-        f:AddMessage(string.format(template, text), r, g, b)
-        rendered = true
-    end
-
-    local function fetchAndRender()
-        local inGuild = IsInGuild and IsInGuild()
-        if not inGuild then return end
-        if not (C_GuildInfo and C_GuildInfo.GetMOTD) then return end
-        render(C_GuildInfo.GetMOTD())
-    end
-
-    fetchAndRender()
-    if rendered then return end
-
-    if not f._bcMotdListener then
-        local listener = CreateFrame("Frame")
-        listener:RegisterEvent("GUILD_MOTD")
-        listener:RegisterEvent("PLAYER_GUILD_UPDATE")
-        listener:RegisterEvent("PLAYER_ENTERING_WORLD")
-        listener:SetScript("OnEvent", function(self, event, arg1)
-            if event == "GUILD_MOTD" then
-                render(arg1)
-            else
-                fetchAndRender()
-            end
-            if rendered then
-                self:UnregisterAllEvents()
-                self:SetScript("OnEvent", nil)
-            end
-        end)
-        f._bcMotdListener = listener
+    if motdListener._displayed then return end
+    if not (IsInGuild and IsInGuild()) then return end
+    if not (C_GuildInfo and C_GuildInfo.GetMOTD) then return end
+    if RenderMOTDOnWindow1(C_GuildInfo.GetMOTD()) then
+        motdListener._displayed = true
+        motdListener:UnregisterAllEvents()
     end
 end
 

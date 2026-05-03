@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 017 — Guild MOTD: module-scope listener decoupled from window lifecycle
+
+v016 installed a per-window event listener inside `DisplayInitialMOTD`. If GUILD_MOTD or PLAYER_GUILD_UPDATE fired before the window was fully wired (e.g. on a fast cold login where guild data lands during Window:Create), the listener could miss the event because frame scripts weren't yet active.
+
+Switched to a single module-scope listener created at file-load time. It listens for `GUILD_MOTD`, `PLAYER_GUILD_UPDATE`, and `PLAYER_ENTERING_WORLD`, and resolves `addon.Window:Get(1)` lazily inside the handler. First non-empty MOTD that successfully renders on window 1 wins; the listener tears down after. `DisplayInitialMOTD` is kept as a thin synchronous attempt for the warm /reload case but the durable mechanism is the module-scope listener.
+
 ## 016 — Guild MOTD: event-driven render
 
 Replaced the polling retry in `DisplayInitialMOTD` with an event-driven listener: the function now tries an immediate `C_GuildInfo.GetMOTD()` (covers `/reload` warm-data path), and if that returns empty it registers a one-shot listener for `GUILD_MOTD` (server pushes during guild-data load), `PLAYER_GUILD_UPDATE` (guild membership finalised), and `PLAYER_ENTERING_WORLD` (final fallback). First event with non-empty MOTD renders, listener tears itself down. More reliable than the previous 5-second polling window on slow cold logins. v015's "primary window only" routing is preserved.

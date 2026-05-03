@@ -1,5 +1,13 @@
 # BazChat Changelog
 
+## 030 — User guide refresh
+
+The in-game User Manual page got a top-down rewrite. The "Architecture"
+page is gone (it was developer notes that didn't belong in a player
+manual). New pages cover the Combat Log tab, the Up/Down chat-input
+history, and Profiles. The Welcome page lists current features cleanly
+and the Slash Commands table is up to date.
+
 ## 029 — Guild MOTD on /reload, for real this time
 
 v028 deferred the initial MOTD render until all chat windows existed,

@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 026 — Guild MOTD: reuse named listener frame across /reload
+
+v017's module-scope MOTD listener used a Lua-local variable to hold the frame: `local motdListener = motdListener or CreateFrame("Frame")`. After `/reload`, the local resets to nil but the OLD frame from the previous session persists (WoW frames live for the session, not the addon-load). The OLD frame's `GUILD_MOTD` registration is still active, the OLD frame's `OnEvent` (now pointing at a stale closure) still fires, and so does the NEW listener we just created. Two listeners firing → two `RenderMOTDOnWindow1` calls → MOTD displayed twice. Three listeners after two `/reload`s, etc.
+
+Listener now uses a named frame (`BazChatGuildMOTDListener`) and looks it up via `_G[name]` before falling through to `CreateFrame`. Same frame survives /reload; we just `UnregisterAllEvents` + re-register events + re-`SetScript("OnEvent", ...)` to reset its state. Net: one listener per session.
+
 ## 025 — UP arrow: removed double-step from redundant key handlers
 
 The chat-history navigator was wired both as `OnArrowPressed` (SetScript) and `OnKeyDown` (HookScript) — the OnKeyDown was added as belt-and-suspenders for the rare case OnArrowPressed got swapped out. But on every UP press both handlers ran: the first advanced `idx` from nil to `#list` and called `SetText(list[#list])` (newest entry), then the second saw `idx == #list` and advanced to `#list - 1`, calling `SetText(list[#list - 1])` (second-newest, overwriting the first). UP appeared to skip the most-recently-typed line. Removed the OnKeyDown redundancy; OnArrowPressed is reliable on `ChatFrameEditBoxTemplate`.

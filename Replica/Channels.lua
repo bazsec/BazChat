@@ -445,7 +445,17 @@ end
 --
 -- Resolves window 1 lazily inside the event handler so the listener
 -- can outlast Window:CreateAll if the events fire early.
-local motdListener = motdListener or CreateFrame("Frame")
+--
+-- Frame is named + global so we reuse the same instance across /reload.
+-- Without this, the local variable on file-scope reset to nil on each
+-- /reload, we'd CreateFrame a new listener every time, and the OLD
+-- listener from the previous session - which is still registered for
+-- GUILD_MOTD because frames persist for the session even after their
+-- addon Lua state resets - kept firing alongside the new one. Result
+-- before this fix: MOTD rendered TWICE on the next /reload (once from
+-- each generation of listener), three times after two /reloads, etc.
+local LISTENER_NAME = "BazChatGuildMOTDListener"
+local motdListener = _G[LISTENER_NAME] or CreateFrame("Frame", LISTENER_NAME)
 motdListener:UnregisterAllEvents()
 motdListener:RegisterEvent("GUILD_MOTD")
 motdListener:RegisterEvent("PLAYER_GUILD_UPDATE")

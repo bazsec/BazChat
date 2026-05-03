@@ -1,5 +1,9 @@
 # BazChat changelog
 
+## 025 — UP arrow: removed double-step from redundant key handlers
+
+The chat-history navigator was wired both as `OnArrowPressed` (SetScript) and `OnKeyDown` (HookScript) — the OnKeyDown was added as belt-and-suspenders for the rare case OnArrowPressed got swapped out. But on every UP press both handlers ran: the first advanced `idx` from nil to `#list` and called `SetText(list[#list])` (newest entry), then the second saw `idx == #list` and advanced to `#list - 1`, calling `SetText(list[#list - 1])` (second-newest, overwriting the first). UP appeared to skip the most-recently-typed line. Removed the OnKeyDown redundancy; OnArrowPressed is reliable on `ChatFrameEditBoxTemplate`.
+
 ## 024 — SyncWindow also treats tab-strip hover as chat hover
 
 v023 fixed the polling ticker but missed `SyncWindow`, which is called synchronously on every tab click. SyncWindow checks `f:IsMouseOver()` to decide whether to instant-snap the chrome's alpha to 0 (onhover mode + not hovering) or to the target value. After a tab click the cursor is over the tabs, not the chat content, so SyncWindow set alpha=0 immediately — then the polling ticker (100 ms later) re-pinged it back in over 0.15 s. That was the "fade out and back in really fast" the user reported.

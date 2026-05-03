@@ -233,15 +233,14 @@ function History:Apply(editBox)
 
     editBox:SetScript("OnArrowPressed", NavigateHistory)
 
-    -- Belt-and-suspenders: also wire OnKeyDown so that even if some
-    -- chat-config code path swaps OnArrowPressed back out from under
-    -- us, the up/down keys still navigate. Returning here doesn't
-    -- block the editbox's other key handling.
-    editBox:HookScript("OnKeyDown", function(self, key)
-        if key == "UP" or key == "DOWN" then
-            NavigateHistory(self, key)
-        end
-    end)
+    -- A previous build also wired OnKeyDown for "UP"/"DOWN" as
+    -- belt-and-suspenders, but that fired in addition to our
+    -- OnArrowPressed handler so a single press advanced the cursor
+    -- TWICE: idx nil -> #list (sets newest), then idx #list -> #list-1
+    -- (sets second-newest, overwriting the first SetText). UP appeared
+    -- to skip the most-recent entry. OnArrowPressed is reliable on
+    -- ChatFrameEditBoxTemplate, so we don't need the redundancy -
+    -- removed to fix the double-step.
 end
 
 ---------------------------------------------------------------------------

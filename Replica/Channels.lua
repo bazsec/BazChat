@@ -458,6 +458,7 @@ local LISTENER_NAME = "BazChatGuildMOTDListener"
 local motdListener = _G[LISTENER_NAME] or CreateFrame("Frame", LISTENER_NAME)
 motdListener:UnregisterAllEvents()
 motdListener:RegisterEvent("GUILD_MOTD")
+motdListener:RegisterEvent("GUILD_ROSTER_UPDATE")
 motdListener:RegisterEvent("PLAYER_GUILD_UPDATE")
 motdListener:RegisterEvent("PLAYER_ENTERING_WORLD")
 motdListener._displayed = false
@@ -497,31 +498,64 @@ motdListener:SetScript("OnEvent", function(self, event, arg1)
     end
 end)
 
--- Called from Window:CreateAll after every window is built and
--- registered in windows[]. On /reload the GUILD_MOTD event doesn't
--- re-fire (the server doesn't re-push cached data), so the listener
--- alone never fires - we have to query GetMOTD() ourselves and AddMessage
--- it. We do this AFTER CreateAll instead of inside Window:Create so that
--- windows[1] is already populated when we look it up.
+-- Initial MOTD render. Called from Window:CreateAll's tail after all
+-- windows are registered, and again as a backwards-compat shim from
+-- Window:Create.
 --
--- Cold login still goes through the listener: GetMOTD() returns "" at
--- PLAYER_LOGIN time (server hasn't pushed yet), so this returns false,
--- _displayed stays false, and the GUILD_MOTD event later catches it.
+-- The hard part is /reload: GUILD_MOTD doesn't re-fire (server only
+-- pushes on changes), and GetMOTD() may return "" for a beat or two
+-- while guild data settles even though the cache is technically warm.
+-- So we:
+--   1) Try once immediately (works for the common case).
+--   2) Kick C_GuildInfo.GuildRoster() to ask the server for a refresh,
+--      which makes it dispatch GUILD_ROSTER_UPDATE / GUILD_MOTD that
+--      our listener catches.
+--   3) Poll every 0.5s for ~10s as a belt-and-suspenders fallback in
+--      case neither event fires (some classic-era / private server
+--      builds drop GUILD_MOTD entirely on /reload).
+-- All three paths share `_displayed`, so whichever wins first stops
+-- the others.
 function Channels:TryRenderInitialMOTD()
     if motdListener._displayed then return end
     if not (C_GuildInfo and C_GuildInfo.GetMOTD) then return end
-    local motd = C_GuildInfo.GetMOTD()
-    if RenderMOTDOnWindow1(motd) then
-        motdListener._displayed = true
-        motdListener:UnregisterAllEvents()
+
+    local function attempt()
+        if motdListener._displayed then return true end
+        local motd = C_GuildInfo.GetMOTD()
+        if RenderMOTDOnWindow1(motd) then
+            motdListener._displayed = true
+            motdListener:UnregisterAllEvents()
+            return true
+        end
+        return false
     end
+
+    -- Immediate try. Done if it lands.
+    if attempt() then return end
+
+    -- Ask the server to re-send guild data. The reply triggers
+    -- GUILD_ROSTER_UPDATE (and on cold login, GUILD_MOTD), both of
+    -- which our listener handles.
+    if C_GuildInfo.GuildRoster then
+        pcall(C_GuildInfo.GuildRoster)
+    end
+
+    -- Polling fallback: try every 0.5s for up to 10s. Stops as soon
+    -- as anything else (event listener, another retry) flips _displayed.
+    local tries = 0
+    local function retry()
+        if motdListener._displayed then return end
+        tries = tries + 1
+        if attempt() then return end
+        if tries < 20 then
+            C_Timer.After(0.5, retry)
+        end
+    end
+    C_Timer.After(0.5, retry)
 end
 
--- Backwards compat for any external callers; the new call site is
--- Window:CreateAll, but Window:Create still invokes this for window 1
--- on initial creation. Now safe to ignore _f and use Window:Get(1)
--- because we ALSO call TryRenderInitialMOTD from CreateAll's tail,
--- which runs after windows[] is populated.
+-- Backwards-compat shim for the old call site inside Window:Create.
+-- The real entry point is now Window:CreateAll's tail.
 function Channels:DisplayInitialMOTD(_f, _ws)
     self:TryRenderInitialMOTD()
 end

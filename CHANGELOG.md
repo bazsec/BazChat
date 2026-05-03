@@ -1,5 +1,14 @@
 # BazChat Changelog
 
+## 029 — Guild MOTD on /reload, for real this time
+
+v028 deferred the initial MOTD render until all chat windows existed,
+which fixed one timing bug — but on /reload the guild data sometimes
+takes a beat to settle, so a one-shot query came back empty and nothing
+showed up. v029 asks the server for a fresh guild refresh and polls for
+a few seconds as a fallback, so the MOTD lands as soon as the data is
+there.
+
 ## 028 — Guild MOTD now shows on /reload again
 
 Reloading no longer hides the Guild Message of the Day. Cold logins still

@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 023 — Fade: tab-strip hover counts as chat hover
+
+When the user clicked a tab to switch, the new active window's polling ticker registered `IsMouseOver()` = false (the cursor was over the tab strip, not the chat content), which set the chrome's `_bcMouseOver` flag false and started the HOLD-then-fade-out timer. The bg faded out over ~2.5s and only faded back in when the cursor crossed into the chat itself.
+
+Hover ticker now ORs `f:IsMouseOver()` with `addon.Tabs.system:IsMouseOver()`. The chat frame and the tab strip are treated as one assembly for hover purposes, so clicking or hovering a tab keeps the bg pinned visible — no more out-and-back flicker on tab switch.
+
 ## 022 — Log tab: reapply inset on resize + stub buttonFrame for Edit Mode
 
 Two follow-ups to v019-v021's combat-log tab inset:

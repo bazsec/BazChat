@@ -1,4 +1,3 @@
--- SPDX-License-Identifier: GPL-2.0-or-later
 ---------------------------------------------------------------------------
 -- BazChat Replica: AutoHide (scrollbar + tab-strip fade)
 --
@@ -181,13 +180,22 @@ function AutoHide:WireWindow(f)
     if not f._bcHoverTicker then
         f._bcHoverTicker = C_Timer.NewTicker(0.1, function()
             if not f or not f:IsShown() then return end
-            local isOver = f:IsMouseOver()
+            -- The chat assembly is the chat frame PLUS the tab strip.
+            -- Treat hovering either as "over the chat" so a tab click /
+            -- tab hover doesn't trip the fade-out timer on tab switch.
+            -- Without the tab-strip OR, switching tabs immediately
+            -- registered isOver=false on the new active window (cursor
+            -- is over the tabs, not the chat content), the HOLD timer
+            -- fired, the bg faded out for ~2s, and only re-faded in
+            -- when the cursor finally crossed into the chat itself.
+            local ts = addon.Tabs and addon.Tabs.system
+            local overTabs = ts and ts.IsMouseOver and ts:IsMouseOver()
+            local isOver = f:IsMouseOver() or overTabs or false
             if isOver == f._bcChatHovering then return end
             f._bcChatHovering = isOver
 
             if f.ScrollBar       then f.ScrollBar._bcMouseOver       = isOver end
             if f._bcChromeFrame  then f._bcChromeFrame._bcMouseOver  = isOver end
-            local ts = addon.Tabs and addon.Tabs.system
             if ts then ts._bcMouseOver = isOver end
             PingScrollBar(f)
             PingBg(f)

@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 009 — Fix: UP arrow brought back the prefixed form ("/say hi") instead of raw input ("hi")
+
+v008 added an `OnEnterPressed` pre-hook that captures the editbox's raw text before Blizzard's handler clears it. That alone is correct — but the pre-existing `AddHistoryLine` hook was still also capturing the *prefixed* form Blizzard's chat path passes ("/say hi" for a plain "hi" sent in say mode), so each user send produced two history entries: the raw text first, then the prefixed form. UP brought back the prefixed form (last entry).
+
+Removed the `AddHistoryLine` hook entirely. The `OnEnterPressed` pre-hook captures slash commands too (the editbox text is "/dance" before Blizzard parses it), so we don't lose any capture path. UP now brings back exactly what the user typed.
+
 ## 008 — Fix: typed-input history not capturing new messages
 
 Up-arrow chat history was loading saved entries from prior sessions but failing to add new messages typed in the current session. Existing capture went through three hooks (`C_ChatInfo.SendChatMessage`, legacy `SendChatMessage`, and per-editbox `AddHistoryLine`); recent Blizzard refactoring of the `ChatFrameEditBox` mixin tree appears to have moved methods around so that `hooksecurefunc` on the editbox instance silently no-ops in some cases.

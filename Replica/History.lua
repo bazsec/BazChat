@@ -130,23 +130,19 @@ function History:Apply(editBox)
             rebuilding = false
         end
 
-        -- Capture slash commands too. The SendChatMessage / C_ChatInfo
-        -- hooks below catch normal chat, but Blizzard's slash-command
-        -- dispatch (ChatEdit_ParseText -> SlashCmdList[...]) bypasses
-        -- SendChatMessage entirely - so /reload, /bbg, /dance and the
-        -- like never reached our typedHistory list. Inside
-        -- ChatEdit_OnEnterPressed, Blizzard calls editBox:AddHistoryLine
-        -- on BOTH chat and slash-command paths (it's what populates the
-        -- editbox's own native cycling buffer), so hooking that method
-        -- on each BazChat editbox catches everything. Add() de-dupes
-        -- consecutive identical entries, so the SendChatMessage path
-        -- still firing alongside this one is harmless.
-        if not editBox._bcHistoryHooked then
-            editBox._bcHistoryHooked = true
-            hooksecurefunc(editBox, "AddHistoryLine", function(_, text)
-                History:Add(text)
-            end)
-        end
+        -- We DELIBERATELY do not hook editBox:AddHistoryLine here.
+        -- Blizzard's chat send path calls AddHistoryLine with a
+        -- *prefixed* form of the message (e.g. "/say hi" for a plain
+        -- "hi" typed in say mode - see ChatFrameEditBoxMixin:AddHistory
+        -- in BlizzardInterfaceCode/...ChatFrameEditBox.lua), so hooking
+        -- that method captured both the raw input ("hi", from our
+        -- OnEnterPressed pre-hook below) AND the prefixed form
+        -- ("/say hi") for the same send. The prefixed form landed last,
+        -- so UP brought back "/say hi" instead of "hi" - reported as
+        -- "second-to-last instead of last". The OnEnterPressed pre-hook
+        -- below handles slash commands too (the editbox text is "/dance"
+        -- before Blizzard parses it), so dropping AddHistoryLine doesn't
+        -- lose any capture path.
     end
 
     -- Robust pre-send capture. The hooks above (C_ChatInfo.SendChatMessage,

@@ -40,24 +40,42 @@ local function GetLogFrame()
     return addon.Window:Get(4)
 end
 
--- Reanchor the quick-button bar onto our Log frame.
---
--- Blizzard's QuickButtonFrame_OnLoad anchors the bar BOTTOMLEFT-to-
--- TOPLEFT of COMBATLOG so it sits as a horizontal strip just above
--- the chat content (tabs > buttons strip > chat lines). We mirror that
--- positioning on our Log frame. Update_QuickButtons reads
--- COMBATLOG:GetRight()/GetLeft() to size the strip and lay out the
--- preset buttons (My actions / What happened to me?) and the
--- "Additional Filters" dropdown - reassigning COMBATLOG means the
--- next Update call sizes against our frame width automatically.
+-- Height we reserve at the top of the Log frame for the QuickButton
+-- strip. Blizzard's bar is 24 px; +2 padding so chat lines don't crowd
+-- the bottom edge of the buttons.
+local QUICKBUTTON_HEIGHT = 26
+
+-- Push the Log frame's top edge down by QUICKBUTTON_HEIGHT so there's
+-- room for the QuickButton strip above the chat content (tabs are
+-- parented separately and sit further up). The frame is normally
+-- SetAllPoints to its dock; we override with a four-point anchor that
+-- offsets the top.
+local function InsetLogFrameTop(targetFrame)
+    if targetFrame._bcLogFrameInsetApplied then return end
+    local parent = targetFrame:GetParent()
+    if not parent then return end
+    targetFrame:ClearAllPoints()
+    targetFrame:SetPoint("TOPLEFT",     parent, "TOPLEFT",     0, -QUICKBUTTON_HEIGHT)
+    targetFrame:SetPoint("TOPRIGHT",    parent, "TOPRIGHT",    0, -QUICKBUTTON_HEIGHT)
+    targetFrame:SetPoint("BOTTOMLEFT",  parent, "BOTTOMLEFT",  0, 0)
+    targetFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, 0)
+    targetFrame._bcLogFrameInsetApplied = true
+end
+
+-- Reanchor the quick-button bar to fill the inset we just carved out
+-- at the top of our Log frame. The bar's children (preset buttons +
+-- additional-filters dropdown + progress bar) lay out automatically
+-- via Blizzard_CombatLog_Update_QuickButtons - we just give them a
+-- container that's the right size and parented to our frame.
 local function ReparentQuickButtonFrame(targetFrame)
     local qbf = _G.CombatLogQuickButtonFrame_Custom
         or _G.CombatLogQuickButtonFrame
     if not qbf or not targetFrame then return end
     qbf:SetParent(targetFrame)
     qbf:ClearAllPoints()
-    qbf:SetPoint("BOTTOMLEFT",  targetFrame, "TOPLEFT",  0, 3)
-    qbf:SetPoint("BOTTOMRIGHT", targetFrame, "TOPRIGHT", 0, 3)
+    qbf:SetPoint("BOTTOMLEFT",  targetFrame, "TOPLEFT",  0, 0)
+    qbf:SetPoint("BOTTOMRIGHT", targetFrame, "TOPRIGHT", 0, 0)
+    qbf:SetHeight(QUICKBUTTON_HEIGHT)
     qbf:SetFrameStrata(targetFrame:GetFrameStrata() or "MEDIUM")
     qbf:SetFrameLevel((targetFrame:GetFrameLevel() or 5) + 5)
     qbf:Show()
@@ -71,6 +89,7 @@ local function ApplyRedirect()
         _G.COMBATLOG = target
     end
 
+    InsetLogFrameTop(target)
     ReparentQuickButtonFrame(target)
 
     -- Repopulate the preset filter buttons (My actions / What happened

@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 019 — Log tab: inset the chat content so the QuickButton bar fits
+
+v018 anchored the combat-log filter bar above the Log frame (Blizzard's default placement, BOTTOMLEFT-to-TOPLEFT of `COMBATLOG`), but BazChat's tab strip already sits above the chat frame so the two collided — preset buttons rendered behind the tabs.
+
+Now the Log frame's top edge is pushed down by 26 px (the bar's height + a small padding) via a four-point anchor on its dock parent. The QuickButton bar fills that newly-vacated gap. Final stack: tabs (above dock) → bar (top 26 px of dock) → chat content (remainder), matching the Blizzard layout exactly.
+
 ## 018 — Log tab: hijack Blizzard's combat log
 
 The Log tab now replicates Blizzard's combat log experience: formatted `COMBAT_LOG_EVENT_UNFILTERED` lines (per-school colors, source/dest/spell/amount coloring, the standard "Your <spell> hit <target> for <amount> <school>." templates) plus the filter UI bar at the top with the preset quick-buttons (`My actions`, `What happened to me?`, any user-saved presets) and the `Additional Filters` dropdown.

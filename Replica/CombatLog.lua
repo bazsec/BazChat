@@ -46,19 +46,20 @@ end
 local QUICKBUTTON_HEIGHT = 26
 
 -- Push the Log frame's top edge down by QUICKBUTTON_HEIGHT so there's
--- room for the QuickButton strip above the chat content (tabs are
--- parented separately and sit further up). The frame is normally
--- SetAllPoints to its dock; we override with a four-point anchor that
--- offsets the top.
+-- room for the QuickButton strip above the chat content. The frame is
+-- normally SetAllPoints(addon.Window.dock); we override with a
+-- four-point anchor that offsets the top against THAT same dock (NOT
+-- the frame's UIParent parent - anchoring to UIParent makes the Log
+-- window cover the whole screen).
 local function InsetLogFrameTop(targetFrame)
     if targetFrame._bcLogFrameInsetApplied then return end
-    local parent = targetFrame:GetParent()
-    if not parent then return end
+    local dock = addon.Window and addon.Window.dock
+    if not dock then return end
     targetFrame:ClearAllPoints()
-    targetFrame:SetPoint("TOPLEFT",     parent, "TOPLEFT",     0, -QUICKBUTTON_HEIGHT)
-    targetFrame:SetPoint("TOPRIGHT",    parent, "TOPRIGHT",    0, -QUICKBUTTON_HEIGHT)
-    targetFrame:SetPoint("BOTTOMLEFT",  parent, "BOTTOMLEFT",  0, 0)
-    targetFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, 0)
+    targetFrame:SetPoint("TOPLEFT",     dock, "TOPLEFT",     0, -QUICKBUTTON_HEIGHT)
+    targetFrame:SetPoint("TOPRIGHT",    dock, "TOPRIGHT",    0, -QUICKBUTTON_HEIGHT)
+    targetFrame:SetPoint("BOTTOMLEFT",  dock, "BOTTOMLEFT",  0, 0)
+    targetFrame:SetPoint("BOTTOMRIGHT", dock, "BOTTOMRIGHT", 0, 0)
     targetFrame._bcLogFrameInsetApplied = true
 end
 

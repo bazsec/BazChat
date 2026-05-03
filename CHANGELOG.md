@@ -1,5 +1,9 @@
 # BazChat changelog
 
+## 020 — Log tab: anchor inset to the dock, not UIParent
+
+v019 anchored the inset Log frame to `targetFrame:GetParent()`, but the chat windows are parented to UIParent and only `SetAllPoints` to the dock — so my four-point anchor stretched the Log frame to fill the entire screen instead of the dock. Anchoring to `addon.Window.dock` directly fixes it.
+
 ## 019 — Log tab: inset the chat content so the QuickButton bar fits
 
 v018 anchored the combat-log filter bar above the Log frame (Blizzard's default placement, BOTTOMLEFT-to-TOPLEFT of `COMBATLOG`), but BazChat's tab strip already sits above the chat frame so the two collided — preset buttons rendered behind the tabs.

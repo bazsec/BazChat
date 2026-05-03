@@ -1,0 +1,124 @@
+-- SPDX-License-Identifier: GPL-2.0-or-later
+---------------------------------------------------------------------------
+-- BazChat Replica: Combat Log
+--
+-- Hijacks Blizzard's combat log so its formatted output (every parsed
+-- COMBAT_LOG_EVENT_UNFILTERED line, with source/dest/spell/amount
+-- coloring per the user's filter settings) lands on BazChat's Log tab
+-- instead of the hidden ChatFrame2.
+--
+-- Mechanism: `_G.COMBATLOG` is a global Blizzard sets to ChatFrame2 in
+-- Blizzard_CombatLog/Mainline/Blizzard_CombatLog.lua. Their
+-- CombatLogDriverMixin:OnCombatLogMessage / OnCombatLogRefilterStarted
+-- / OnCombatLogMessageLimitChanged / OnCombatLogEntriesCleared all
+-- call methods on `COMBATLOG` (AddMessage / BackFillMessage / Clear /
+-- SetMaxLines). We just rebind the global to our Log frame after their
+-- addon loads. Our SMF supports every method they call.
+--
+-- The combat-log filter UI (the "Additional Filters" dropdown +
+-- refilter progress bar) lives in CombatLogQuickButtonFrame_Custom,
+-- parented to ChatFrame2 in their XML. We reparent it onto our Log
+-- frame's top-right so the user can still configure filters.
+---------------------------------------------------------------------------
+
+local addonName, addon = ...
+
+local CombatLog = {}
+addon.CombatLog = CombatLog
+
+-- The Log tab is window index 4 (DEFAULTS.windows[4] in Core/Init.lua,
+-- eventGroup = "LOG"). Resolved lazily so the rebind survives any
+-- future renumbering.
+local function GetLogFrame()
+    if not addon.Window or not addon.Window.Get then return nil end
+    -- Find the window whose canonical group is LOG. Fall back to
+    -- index 4 if the lookup helper isn't available.
+    if addon.Window.GetByGroup then
+        local f = addon.Window:GetByGroup("LOG")
+        if f then return f end
+    end
+    return addon.Window:Get(4)
+end
+
+-- Reanchor the quick-button bar onto our Log frame.
+--
+-- Blizzard's QuickButtonFrame_OnLoad anchors the bar BOTTOMLEFT-to-
+-- TOPLEFT of COMBATLOG so it sits as a horizontal strip just above
+-- the chat content (tabs > buttons strip > chat lines). We mirror that
+-- positioning on our Log frame. Update_QuickButtons reads
+-- COMBATLOG:GetRight()/GetLeft() to size the strip and lay out the
+-- preset buttons (My actions / What happened to me?) and the
+-- "Additional Filters" dropdown - reassigning COMBATLOG means the
+-- next Update call sizes against our frame width automatically.
+local function ReparentQuickButtonFrame(targetFrame)
+    local qbf = _G.CombatLogQuickButtonFrame_Custom
+        or _G.CombatLogQuickButtonFrame
+    if not qbf or not targetFrame then return end
+    qbf:SetParent(targetFrame)
+    qbf:ClearAllPoints()
+    qbf:SetPoint("BOTTOMLEFT",  targetFrame, "TOPLEFT",  0, 3)
+    qbf:SetPoint("BOTTOMRIGHT", targetFrame, "TOPRIGHT", 0, 3)
+    qbf:SetFrameStrata(targetFrame:GetFrameStrata() or "MEDIUM")
+    qbf:SetFrameLevel((targetFrame:GetFrameLevel() or 5) + 5)
+    qbf:Show()
+end
+
+local function ApplyRedirect()
+    local target = GetLogFrame()
+    if not target then return false end
+
+    if _G.COMBATLOG ~= target then
+        _G.COMBATLOG = target
+    end
+
+    ReparentQuickButtonFrame(target)
+
+    -- Repopulate the preset filter buttons (My actions / What happened
+    -- to me? + any user-defined filters) now that COMBATLOG points at
+    -- our frame - the layout reads COMBATLOG width to decide which
+    -- buttons fit on the strip. Safe to call any time after the
+    -- combat-log addon's OnLoad has run.
+    if _G.Blizzard_CombatLog_Update_QuickButtons then
+        pcall(_G.Blizzard_CombatLog_Update_QuickButtons)
+    end
+
+    -- Sync the message limit Blizzard's driver tracks with our Log
+    -- frame's actual SetMaxLines value so OnCombatLogMessageLimitChanged
+    -- doesn't shrink our buffer. Default 500 from Core/Init.lua.
+    if target.GetMaxLines and target.SetMaxLines then
+        target:SetMaxLines(target:GetMaxLines() or 500)
+    end
+
+    return true
+end
+
+---------------------------------------------------------------------------
+-- Public: Apply()
+--
+-- Called from Replica:Start AFTER Window:CreateAll. If
+-- Blizzard_CombatLog hasn't loaded yet (it's a load-on-demand addon
+-- bundled into the game UI), defer until ADDON_LOADED fires for it.
+---------------------------------------------------------------------------
+
+function CombatLog:Apply()
+    if C_AddOns and C_AddOns.LoadAddOn then
+        C_AddOns.LoadAddOn("Blizzard_CombatLog")
+    end
+
+    if ApplyRedirect() then return end
+
+    -- Couldn't apply yet (Log frame missing or Blizzard combat log
+    -- not loaded). Wait for the addon to finish loading then retry.
+    local watcher = CreateFrame("Frame")
+    watcher:RegisterEvent("ADDON_LOADED")
+    watcher:RegisterEvent("PLAYER_ENTERING_WORLD")
+    watcher:SetScript("OnEvent", function(self, event, name)
+        if event == "ADDON_LOADED" and name ~= "Blizzard_CombatLog" then
+            return
+        end
+        if ApplyRedirect() then
+            self:UnregisterAllEvents()
+            self:SetScript("OnEvent", nil)
+        end
+    end)
+end

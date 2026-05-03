@@ -113,6 +113,17 @@ function Replica:Start()
     --    /reload - no Lua changes here.
     if addon.Window then addon.Window:CreateAll() end
 
+    -- 3. Hijack Blizzard's combat log: point _G.COMBATLOG at our Log
+    --    window and reparent CombatLogQuickButtonFrame so the formatted
+    --    output, filter presets (My actions / What happened to me?),
+    --    and Additional Filters dropdown all surface on our tab. Their
+    --    CombatLogDriverMixin keeps doing the heavy lifting (parsing
+    --    COMBAT_LOG_EVENT_UNFILTERED + applying the filter settings);
+    --    we just redirect the AddMessage destination.
+    if addon.CombatLog and addon.CombatLog.Apply then
+        addon.CombatLog:Apply()
+    end
+
     started = true
 
     -- (BazChat used to print its own "vXXX loaded" line here. As of

@@ -2,7 +2,7 @@
 ## Title: BazChat
 ## Notes: A modern, polished chat replacement that mirrors Blizzard's default, with copy-paste, compact channels, and timestamps.
 ## Author: Baz4k
-## Version: 017
+## Version: 018
 ## X-License: GPL v2
 ## Category: Baz Suite
 ## X-Category: Chat & Communication
@@ -47,6 +47,7 @@ Replica\Window.lua
 Replica\History.lua
 Replica\TabDrag.lua
 Replica\CopyChat.lua
+Replica\CombatLog.lua
 Replica\Init.lua
 
 # Options + docs (Settings page will be reworked for Phase 8 once

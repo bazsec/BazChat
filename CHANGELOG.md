@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 018 — Log tab: hijack Blizzard's combat log
+
+The Log tab now replicates Blizzard's combat log experience: formatted `COMBAT_LOG_EVENT_UNFILTERED` lines (per-school colors, source/dest/spell/amount coloring, the standard "Your <spell> hit <target> for <amount> <school>." templates) plus the filter UI bar at the top with the preset quick-buttons (`My actions`, `What happened to me?`, any user-saved presets) and the `Additional Filters` dropdown.
+
+Implementation: a new `Replica/CombatLog.lua` rebinds `_G.COMBATLOG` from `ChatFrame2` (which BazChat hides) to our Log window, then reparents `CombatLogQuickButtonFrame_Custom` onto our Log frame and re-runs `Blizzard_CombatLog_Update_QuickButtons` so the preset buttons re-layout against our frame's width. Blizzard's `CombatLogDriverMixin` keeps doing the parsing and formatting; we just redirect where it writes. Wired into `Replica:Start` after `Window:CreateAll`. Falls back to an `ADDON_LOADED` watcher if `Blizzard_CombatLog` (load-on-demand) hasn't loaded yet.
+
 ## 017 — Guild MOTD: module-scope listener decoupled from window lifecycle
 
 v016 installed a per-window event listener inside `DisplayInitialMOTD`. If GUILD_MOTD or PLAYER_GUILD_UPDATE fired before the window was fully wired (e.g. on a fast cold login where guild data lands during Window:Create), the listener could miss the event because frame scripts weren't yet active.

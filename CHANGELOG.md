@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 010 — Fix: pressing "/" after /reload entered "//"
+
+The v007 dedupe (only `SetText` when current text differs from target) wasn't fully covering Blizzard's deferred-text path. `ChatFrameUtil.OpenChat` stores `editbox.text = "/"` and `editbox.setText = 1`, then `ChatFrameEditBoxMixin:OnUpdate` applies the SetText on the next frame. Our hook ran synchronously and set the text immediately; on the next frame the `setText=1` path then ran `SetText(self.text)` *again*, and in some cursor states that produced "//".
+
+Fix: clear `editbox.setText` and `editbox.text` on every BazChat editbox inside our `OpenChat` hook before applying our `SetText`. The deferred `OnUpdate` path can no longer fire a second SetText behind our back. We apply the text exactly once and own the result. Cursor position set to the end of the text so the user types where expected.
+
 ## 009 — Fix: UP arrow brought back the prefixed form ("/say hi") instead of raw input ("hi")
 
 v008 added an `OnEnterPressed` pre-hook that captures the editbox's raw text before Blizzard's handler clears it. That alone is correct — but the pre-existing `AddHistoryLine` hook was still also capturing the *prefixed* form Blizzard's chat path passes ("/say hi" for a plain "hi" sent in say mode), so each user send produced two history entries: the raw text first, then the prefixed form. UP brought back the prefixed form (last entry).

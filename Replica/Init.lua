@@ -69,17 +69,42 @@ function Replica:Start()
                 -- respect that. Otherwise force ours.
                 if chatFrame ~= nil then return end
                 local w = addon.Window and addon.Window:Get(1)
-                if w and w.editBox and ACTIVE_CHAT_EDIT_BOX ~= w.editBox then
+                if not w or not w.editBox then return end
+
+                -- Force our editbox active when Blizzard didn't pick
+                -- it (ChooseBoxForSend can return a stale hidden
+                -- editbox even though we own DEFAULT_CHAT_FRAME).
+                if ACTIVE_CHAT_EDIT_BOX ~= w.editBox then
                     ChatEdit_ActivateChat(w.editBox)
-                    -- Only set text if it differs from what's already
-                    -- in the editbox. Blizzard's original OpenChat may
-                    -- have already prefilled the same text on our
-                    -- editbox (we're DEFAULT_CHAT_FRAME, so its
-                    -- ChooseBoxForSend often picks ours); blindly
-                    -- re-setting concatenates with the cursor position
-                    -- in some Blizzard code paths and produces "//".
-                    if text and (w.editBox:GetText() or "") ~= text then
-                        w.editBox:SetText(text)
+                end
+
+                -- Blizzard's OpenChat sets editbox.text and
+                -- editbox.setText = 1 on the editbox returned by
+                -- ChooseBoxForSend so ChatFrameEditBoxMixin:OnUpdate
+                -- can apply the text on the next frame. The previous
+                -- (v007) dedupe fix tried to suppress our SetText when
+                -- the text already matched, but that fired AFTER the
+                -- deferred OnUpdate in some sequences and the cursor-
+                -- position interaction on a re-SetText could still
+                -- produce "//" after a /reload. Clearing the deferred
+                -- flags on every BazChat editbox inside our hook
+                -- guarantees the OnUpdate path can't fire a second
+                -- SetText behind our back: we apply the text exactly
+                -- once here and own the result.
+                if addon.Window and addon.Window.list then
+                    for _, win in pairs(addon.Window.list) do
+                        local eb = win and win.editBox
+                        if eb then
+                            eb.setText = 0
+                            eb.text = nil
+                        end
+                    end
+                end
+
+                if text then
+                    w.editBox:SetText(text)
+                    if w.editBox.SetCursorPosition then
+                        w.editBox:SetCursorPosition(#text)
                     end
                 end
             end)

@@ -1,5 +1,12 @@
 # BazChat changelog
 
+## 022 — Log tab: reapply inset on resize + stub buttonFrame for Edit Mode
+
+Two follow-ups to v019-v021's combat-log tab inset:
+
+- **Resize blew away the inset.** Edit Mode's resize handler and BazChat's own re-SetAllPoints calls in tab-switch paths overrode the four-point anchor that pushes the SMF down 26 px, so after dragging the resize handle the QuickButton bar started overlapping the tabs again. Added an `OnSizeChanged` hook that reapplies the inset (and the chrome's dock anchor) every time the frame's size changes.
+- **`buttonFrame` nil error opening Edit Mode.** Blizzard's `FCF_SetButtonSide` (FloatingChatFrame.lua:1344) iterates registered chat frames and calls `ClearAllPoints` on each `chatFrame.buttonFrame`. Our replica chat frames don't have that field. Added a hidden 1×1 stub frame as `target.buttonFrame` on the Log frame so the call no-ops harmlessly.
+
 ## 021 — Log tab: keep chrome full-size when SMF is inset
 
 v019/v020 inset the Log frame's SMF top by 26 px to make room for the QuickButton bar. The NineSlice chrome panel (Replica/Chrome.lua) anchors to the SMF's corners, so when the SMF shrunk the chrome shrunk with it — the Log tab's visible chat box ended up 26 px shorter than the other tabs. The user's intent was to shrink the *log content area* without changing the *background size*.

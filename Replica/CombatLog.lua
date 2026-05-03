@@ -124,6 +124,37 @@ local function ApplyRedirect()
     end
     ReparentQuickButtonFrame(target)
 
+    -- Reapply the inset whenever the frame is resized. Edit Mode's
+    -- resize handler and BazChat's own re-SetAllPoints in tab-switch
+    -- paths clobber our four-point anchor; without the rehook the bar
+    -- starts overlapping the tabs again as soon as the user drags
+    -- the resize handle. Idempotent via the _bcLogFrameInsetApplied
+    -- flag reset.
+    if not target._bcLogFrameInsetHooked then
+        target._bcLogFrameInsetHooked = true
+        target:HookScript("OnSizeChanged", function(self)
+            self._bcLogFrameInsetApplied = nil
+            InsetLogFrameTop(self)
+            if addon.Window and addon.Window.dock then
+                ReanchorChromeToDock(self, addon.Window.dock)
+            end
+        end)
+    end
+
+    -- Stub buttonFrame so Blizzard's FCF_SetButtonSide call from
+    -- Edit Mode (FloatingChatFrame.lua:1344) doesn't error on our
+    -- replica frame. The replica window is built from a custom
+    -- template that has no buttonFrame, but Edit Mode iterates every
+    -- registered chat frame and calls ClearAllPoints / SetPoint on
+    -- their buttonFrame. Giving it a hidden dummy frame turns the
+    -- call into a harmless no-op.
+    if not target.buttonFrame then
+        local stub = CreateFrame("Frame", nil, target)
+        stub:Hide()
+        stub:SetSize(1, 1)
+        target.buttonFrame = stub
+    end
+
     -- Repopulate the preset filter buttons (My actions / What happened
     -- to me? + any user-defined filters) now that COMBATLOG points at
     -- our frame - the layout reads COMBATLOG width to decide which

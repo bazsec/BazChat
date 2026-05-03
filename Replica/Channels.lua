@@ -432,19 +432,29 @@ end
 function Channels:DisplayInitialMOTD(f, ws, attempt)
     if not f or not ws or not ws.channels or not ws.channels.guild then return end
     if not (C_GuildInfo and C_GuildInfo.GetMOTD) then return end
-    if not (ChatFrameUtil and ChatFrameUtil.DisplayGMOTD) then return end
+    if not f.AddMessage then return end
 
+    -- Self-contained MOTD display. v012 relied on
+    -- ChatFrameUtil.DisplayGMOTD which apparently isn't always wired
+    -- to fire on our replica frame; instead we just fetch the cached
+    -- MOTD via C_GuildInfo.GetMOTD() and call AddMessage on our frame
+    -- directly, formatted with the GUILD chat color and the standard
+    -- "Guild Message of the Day: <text>" template Blizzard uses.
+    --
     -- IsInGuild() and GetMOTD() can both return falsy/empty at the
     -- moment Replica:Start runs (PLAYER_LOGIN fires before guild data
-    -- has finished loading on a cold login). Retry up to ~5 seconds so
-    -- a slightly slow guild-data load still gets the MOTD displayed.
-    -- Live GUILD_MOTD events still hit the normal mixin path so a
-    -- /gmotd change later in the session shows up regardless.
+    -- has finished loading on a cold login), so retry up to ~5 seconds
+    -- until guild data is available. Bail fast for non-guilded users.
     attempt = attempt or 1
     local inGuild = IsInGuild and IsInGuild()
     local motd = inGuild and C_GuildInfo.GetMOTD() or nil
     if motd and motd ~= "" then
-        ChatFrameUtil.DisplayGMOTD(f, motd)
+        local info = ChatTypeInfo and ChatTypeInfo["GUILD"]
+        local r = (info and info.r) or 0.25
+        local g = (info and info.g) or 1.00
+        local b = (info and info.b) or 0.25
+        local template = _G.GUILD_MOTD_TEMPLATE or "Guild Message of the Day: %s"
+        f:AddMessage(string.format(template, motd), r, g, b)
         return
     end
 

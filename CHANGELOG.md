@@ -1,5 +1,9 @@
 # BazChat changelog
 
+## 014 — Guild MOTD: pull and display ourselves instead of routing through ChatFrameUtil
+
+v013 still went through `ChatFrameUtil.DisplayGMOTD` which apparently doesn't always render on our replica window in modern WoW. Replaced that call with a direct `frame:AddMessage(...)`: fetch the cached MOTD via `C_GuildInfo.GetMOTD()`, format with `GUILD_MOTD_TEMPLATE` ("Guild Message of the Day: %s"), color from `ChatTypeInfo["GUILD"]` (standard guild green), feed straight into our AddMessage chain. Same retry behavior as v013 (up to 10 attempts at 0.5s intervals to ride out the cold-login guild-data race).
+
 ## 013 — Fix: Guild MOTD missing after /reload + cold login
 
 `Channels:DisplayInitialMOTD` ran once at window-create time (during `Replica:Start` at PLAYER_LOGIN), which is too early on a cold login — `IsInGuild()` and `C_GuildInfo.GetMOTD()` haven't returned valid data yet, so the MOTD recovery silently bailed. Live `GUILD_MOTD` events for `/gmotd` changes still worked since they hit the subscribed mixin, but the *cached* MOTD from session start was lost.

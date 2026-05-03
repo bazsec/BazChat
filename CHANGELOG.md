@@ -1,5 +1,11 @@
 # BazChat changelog
 
+## 021 — Log tab: keep chrome full-size when SMF is inset
+
+v019/v020 inset the Log frame's SMF top by 26 px to make room for the QuickButton bar. The NineSlice chrome panel (Replica/Chrome.lua) anchors to the SMF's corners, so when the SMF shrunk the chrome shrunk with it — the Log tab's visible chat box ended up 26 px shorter than the other tabs. The user's intent was to shrink the *log content area* without changing the *background size*.
+
+`Replica/CombatLog.lua` now also re-anchors the Log frame's chrome to the dock instead of the SMF (with the same Chrome.lua INSET\_\* offsets, hardcoded here). The chrome stays the same size as the other tabs' chromes; only the SMF text-rendering area is inset to make room for the bar.
+
 ## 020 — Log tab: anchor inset to the dock, not UIParent
 
 v019 anchored the inset Log frame to `targetFrame:GetParent()`, but the chat windows are parented to UIParent and only `SetAllPoints` to the dock — so my four-point anchor stretched the Log frame to fill the entire screen instead of the dock. Anchoring to `addon.Window.dock` directly fixes it.

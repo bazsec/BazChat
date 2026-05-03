@@ -45,6 +45,34 @@ end
 -- the bottom edge of the buttons.
 local QUICKBUTTON_HEIGHT = 26
 
+-- Mirror Chrome.lua's local INSET_* constants. We need them so we can
+-- re-anchor the Log frame's chrome to the DOCK (full-size) instead of
+-- the SMF (which shrinks when we inset the chat content). Keep these
+-- in sync with Chrome.lua's locals; if those change, update here too.
+local CHROME_INSET_LEFT   = 10
+local CHROME_INSET_RIGHT  = 26
+local CHROME_INSET_TOP    = 11
+local CHROME_INSET_BOTTOM = 29
+
+-- The chrome panel (NineSlice backdrop + corners + scrollbar zone) is
+-- normally anchored to the SMF's corners with INSET_* offsets. Once we
+-- shrink the SMF top by QUICKBUTTON_HEIGHT, the chrome follows and
+-- visually shrinks too - the Log tab's window appears 26 px shorter
+-- than the other tabs' windows. Re-anchoring the chrome to the dock
+-- (which has the same intended size as a full-height SMF would) keeps
+-- the visible chat-box dimensions identical across tabs while leaving
+-- the chat-text rendering area inset to make room for the QuickButton
+-- bar.
+local function ReanchorChromeToDock(targetFrame, dock)
+    local chrome = targetFrame._bcChromeFrame
+    if not chrome or not dock then return end
+    chrome:ClearAllPoints()
+    chrome:SetPoint("TOPLEFT",     dock, "TOPLEFT",
+        -CHROME_INSET_LEFT,  CHROME_INSET_TOP)
+    chrome:SetPoint("BOTTOMRIGHT", dock, "BOTTOMRIGHT",
+         CHROME_INSET_RIGHT, -CHROME_INSET_BOTTOM)
+end
+
 -- Push the Log frame's top edge down by QUICKBUTTON_HEIGHT so there's
 -- room for the QuickButton strip above the chat content. The frame is
 -- normally SetAllPoints(addon.Window.dock); we override with a
@@ -91,6 +119,9 @@ local function ApplyRedirect()
     end
 
     InsetLogFrameTop(target)
+    if addon.Window and addon.Window.dock then
+        ReanchorChromeToDock(target, addon.Window.dock)
+    end
     ReparentQuickButtonFrame(target)
 
     -- Repopulate the preset filter buttons (My actions / What happened

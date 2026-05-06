@@ -111,7 +111,16 @@ function Replica:Start()
     --    General + Guild; new tabs (Whispers, Combat, etc.) come
     --    online by extending DEFAULTS.windows in Core/Init.lua and
     --    /reload - no Lua changes here.
-    if addon.Window then addon.Window:CreateAll() end
+    if addon.Window then
+        addon.Window:CreateAll()
+        -- Re-pop any tabs the user had popped out before logging out.
+        -- Has to run after CreateAll so the windows exist, AND after
+        -- Tabs:Ensure so the tab strip is built (popping a tab needs
+        -- to call Tabs:UpdateVisibility to hide its strip entry).
+        if addon.Window.RestorePoppedStates then
+            addon.Window:RestorePoppedStates()
+        end
+    end
 
     -- 3. Hijack Blizzard's combat log: point _G.COMBATLOG at our Log
     --    window and reparent CombatLogQuickButtonFrame so the formatted

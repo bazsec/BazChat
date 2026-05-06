@@ -1189,3 +1189,232 @@ function Window:All()
     for i, w in pairs(windows) do out[i] = w end
     return out
 end
+
+---------------------------------------------------------------------------
+-- Pop out / pop in
+---------------------------------------------------------------------------
+--
+-- A "popped" tab detaches from the main chat dock and floats as its
+-- own movable + resizable window, with a small title bar (drag handle
+-- + close button) above the chat frame. Multiple tabs can be popped
+-- at once. State and geometry persist via the tab's profile entry
+-- (ws.popped and ws.popPos), so a relogged-out user comes back to
+-- the same layout.
+--
+-- The popped tab is hidden from the dock's tab strip (Tabs.lua's
+-- UpdateVisibility check); the close button is the user's path back
+-- into the dock. Right-clicking the title bar with shift held opens
+-- BazCore's chat-tab context menu (same one the docked tab strip
+-- uses), so menu actions (Channels..., Clear messages, etc.) stay
+-- reachable while popped.
+---------------------------------------------------------------------------
+
+local function GetProfile()
+    return (addon.db and addon.db.profile)
+        or (addon.core and addon.core.db and addon.core.db.profile)
+end
+
+local function GetWindowSettings(idx)
+    local p = GetProfile()
+    if not p then return nil end
+    p.windows = p.windows or {}
+    p.windows[idx] = p.windows[idx] or {}
+    return p.windows[idx]
+end
+
+local function EnsurePopChrome(self, idx)
+    if self._bazPopChrome then return self._bazPopChrome end
+
+    -- Title bar above the chat frame: drag handle + label + close
+    local bar = CreateFrame("Frame", nil, self)
+    bar:SetPoint("BOTTOMLEFT", self, "TOPLEFT",  0, 1)
+    bar:SetPoint("BOTTOMRIGHT", self, "TOPRIGHT", 0, 1)
+    bar:SetHeight(20)
+    bar:EnableMouse(true)
+    bar:RegisterForDrag("LeftButton")
+    bar:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+
+    bar.bg = bar:CreateTexture(nil, "BACKGROUND")
+    bar.bg:SetAllPoints()
+    bar.bg:SetColorTexture(0.05, 0.05, 0.05, 0.85)
+
+    bar.line = bar:CreateTexture(nil, "BORDER")
+    bar.line:SetPoint("BOTTOMLEFT")
+    bar.line:SetPoint("BOTTOMRIGHT")
+    bar.line:SetHeight(1)
+    bar.line:SetColorTexture(0.6, 0.5, 0.2, 0.7)
+
+    bar.label = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    bar.label:SetPoint("LEFT", bar, "LEFT", 8, 0)
+    bar.label:SetTextColor(1, 0.82, 0)
+
+    -- Close button = pop in (re-dock). NOT delete - the X on a
+    -- floating chat window in default Blizzard UI also re-docks
+    -- rather than destroying the tab.
+    local close = CreateFrame("Button", nil, bar)
+    close:SetSize(18, 18)
+    close:SetPoint("RIGHT", bar, "RIGHT", -4, 0)
+    close:SetNormalTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
+    close:SetPushedTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Down")
+    close:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
+    close:SetScript("OnClick", function() Window:PopIn(idx) end)
+    close:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(close, "ANCHOR_TOP")
+        GameTooltip:SetText("Re-dock", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    close:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    bar:SetScript("OnDragStart", function() self:StartMoving() end)
+    bar:SetScript("OnDragStop", function()
+        self:StopMovingOrSizing()
+        Window:SavePopGeometry(idx)
+    end)
+    bar:SetScript("OnMouseUp", function(_, button)
+        if button == "RightButton" and IsShiftKeyDown() and BazCore.OpenContextMenu then
+            BazCore:OpenContextMenu("chat-tab", bar, {
+                tab   = bar,   -- title bar acts as the tab while popped
+                index = idx,
+            })
+        end
+    end)
+
+    -- Resize grip at bottom-right.
+    local grip = CreateFrame("Button", nil, self)
+    grip:SetSize(16, 16)
+    grip:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", 0, 0)
+    grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    grip:SetScript("OnMouseDown", function() self:StartSizing("BOTTOMRIGHT") end)
+    grip:SetScript("OnMouseUp", function()
+        self:StopMovingOrSizing()
+        Window:SavePopGeometry(idx)
+    end)
+    bar.grip = grip
+
+    self._bazPopChrome = bar
+    self:SetMovable(true)
+    self:SetResizable(true)
+    self:SetClampedToScreen(true)
+    if self.SetResizeBounds then
+        self:SetResizeBounds(220, 120)
+    end
+    return bar
+end
+
+function Window:SavePopGeometry(idx)
+    local f = windows[idx]
+    if not f then return end
+    local ws = GetWindowSettings(idx)
+    if not ws then return end
+    local point, _, relativePoint, x, y = f:GetPoint()
+    ws.popPos = {
+        point         = point         or "CENTER",
+        relativePoint = relativePoint or "CENTER",
+        x             = x or 0,
+        y             = y or 0,
+        w             = f:GetWidth(),
+        h             = f:GetHeight(),
+    }
+end
+
+function Window:PopOut(idx)
+    local f = windows[idx]
+    if not f then return end
+    local ws = GetWindowSettings(idx)
+    if not ws or ws.popped then return end
+    ws.popped = true
+
+    local chrome = EnsurePopChrome(f, idx)
+    chrome.label:SetText(ws.label or ("Tab " .. idx))
+    chrome:Show()
+    if chrome.grip then chrome.grip:Show() end
+
+    f:ClearAllPoints()
+    f:SetParent(UIParent)
+    f:SetFrameStrata("HIGH")
+
+    local pos = ws.popPos
+    if pos and pos.point then
+        f:SetPoint(pos.point, UIParent, pos.relativePoint or "CENTER",
+                   pos.x or 0, pos.y or 0)
+        f:SetSize(pos.w or 420, pos.h or 240)
+    else
+        f:SetPoint("CENTER", UIParent, "CENTER", 200, 0)
+        f:SetSize(420, 240)
+    end
+    f:Show()
+
+    -- Active-tab swap: if we just popped the tab that was active in
+    -- the dock, the dock would be left with a hidden frame as its
+    -- "active" view. Switch the dock to tab 1 (or any non-popped).
+    local ts = addon.Tabs and addon.Tabs.system
+    if ts and ts.selectedTabID == idx and ts.SetTab then
+        local p = GetProfile()
+        for i = 1, #ts.tabs do
+            if i ~= idx and not (p and p.windows and p.windows[i] and p.windows[i].popped) then
+                ts:SetTab(i, false)
+                break
+            end
+        end
+    end
+
+    if addon.Tabs and addon.Tabs.UpdateVisibility then
+        addon.Tabs:UpdateVisibility()
+    end
+end
+
+function Window:PopIn(idx)
+    local f = windows[idx]
+    if not f then return end
+    local ws = GetWindowSettings(idx)
+    if not ws or not ws.popped then return end
+
+    Window:SavePopGeometry(idx)
+    ws.popped = false
+
+    if f._bazPopChrome then
+        f._bazPopChrome:Hide()
+        if f._bazPopChrome.grip then f._bazPopChrome.grip:Hide() end
+    end
+    f:SetMovable(false)
+    f:SetResizable(false)
+    f:SetFrameStrata("MEDIUM")
+
+    local dock = Window:CreateDock()
+    f:ClearAllPoints()
+    f:SetParent(UIParent)
+    f:SetAllPoints(dock)
+
+    -- Show only if this is now the active tab; otherwise hide so it
+    -- stacks correctly under the active one in the dock.
+    local ts = addon.Tabs and addon.Tabs.system
+    if ts and ts.selectedTabID == idx then
+        f:Show()
+    else
+        f:Hide()
+    end
+
+    if addon.Tabs and addon.Tabs.UpdateVisibility then
+        addon.Tabs:UpdateVisibility()
+    end
+end
+
+function Window:IsPopped(idx)
+    local p = GetProfile()
+    return p and p.windows and p.windows[idx] and p.windows[idx].popped == true
+end
+
+-- Re-pop any tabs that were popped at logout. Called after Window:CreateAll
+-- has finished and tabs are wired up.
+function Window:RestorePoppedStates()
+    local p = GetProfile()
+    if not p or not p.windows then return end
+    for idx, ws in pairs(p.windows) do
+        if ws and ws.popped then
+            ws.popped = false  -- PopOut early-returns if already popped
+            Window:PopOut(idx)
+        end
+    end
+end

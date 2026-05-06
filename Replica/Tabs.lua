@@ -59,6 +59,26 @@ local function GetBazChatSection(ctx)
         },
     }
 
+    -- Pop out / Pop in toggle. The label flips based on the tab's
+    -- current popped state.
+    if addon.Window and addon.Window.IsPopped then
+        if addon.Window:IsPopped(idx) then
+            items[#items + 1] = {
+                label = "Pop in (re-dock)",
+                onClick = function()
+                    if addon.Window.PopIn then addon.Window:PopIn(idx) end
+                end,
+            }
+        else
+            items[#items + 1] = {
+                label = "Pop out",
+                onClick = function()
+                    if addon.Window.PopOut then addon.Window:PopOut(idx) end
+                end,
+            }
+        end
+    end
+
     -- Tab 1 is the protected default; deletion would orphan the dock
     -- chrome. DeleteTab itself guards this but skipping the entry on
     -- the first tab keeps the menu tidy.
@@ -229,7 +249,9 @@ function Tabs:UpdateVisibility()
 
     for idx, tab in ipairs(ts.tabs) do
         local ws     = p and p.windows and p.windows[idx]
-        local should = ShouldShowTab(ws and ws.autoShow)
+        -- Popped tabs are hidden from the strip - their floating
+        -- chrome's close button is the path back into the dock.
+        local should = ShouldShowTab(ws and ws.autoShow) and not (ws and ws.popped)
         if tab:IsShown() ~= should then
             tab:SetShown(should)
             layoutChanged = true

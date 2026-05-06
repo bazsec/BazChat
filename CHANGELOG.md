@@ -1,5 +1,22 @@
 # BazChat Changelog
 
+## 032 — Pop tabs out of the dock
+
+A chat tab can now detach from the main dock and float as its own
+movable + resizable window. Open the shift+right-click menu on a
+tab and choose "Pop out"; a small title bar appears above the
+window with a drag handle and a close button (the X re-docks the
+tab — it doesn't delete). Resize via the grip at the bottom-right
+corner.
+
+State persists. Tabs that were popped at logout come back popped at
+the same position and size next session.
+
+While popped, the tab disappears from the strip; the close button
+is the path back. Shift+right-clicking the popped window's title
+bar still opens the same context menu, so menu actions (Channels...,
+Clear messages, Pop in) stay reachable without re-docking first.
+
 ## 031 — Chat tab shift+right-click menu
 
 Right-clicking a chat tab used to immediately open the channel popup.

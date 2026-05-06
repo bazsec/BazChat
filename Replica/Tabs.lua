@@ -27,6 +27,60 @@ local Tabs = {}
 addon.Tabs = Tabs
 
 ---------------------------------------------------------------------------
+-- chat-tab context menu section
+--
+-- Registered against the shared "chat-tab" scope so the BazChat
+-- entries (Channels / Clear / Delete) sit alongside any other addon
+-- that wants to extend tab behaviour (BazTooltipEditor's Inspect,
+-- a future log-archiver, etc.). Tabs.lua's OnMouseUp hook below
+-- opens the menu on shift+right-click.
+---------------------------------------------------------------------------
+
+local function GetBazChatSection(ctx)
+    if not ctx or not ctx.index then return end
+    local idx = ctx.index
+    local tab = ctx.tab
+
+    local items = {
+        {
+            label = "Channels...",
+            onClick = function()
+                if addon.Channels and addon.Channels.ShowPopup and tab then
+                    addon.Channels:ShowPopup(tab, idx)
+                end
+            end,
+        },
+        {
+            label = "Clear messages",
+            onClick = function()
+                local w = addon.Window and addon.Window.Get and addon.Window:Get(idx)
+                if w and w.Clear then w:Clear() end
+            end,
+        },
+    }
+
+    -- Tab 1 is the protected default; deletion would orphan the dock
+    -- chrome. DeleteTab itself guards this but skipping the entry on
+    -- the first tab keeps the menu tidy.
+    if idx > 1 then
+        items[#items + 1] = {
+            label = "Delete tab",
+            onClick = function()
+                if addon.Tabs and addon.Tabs.DeleteTab then
+                    addon.Tabs:DeleteTab(idx)
+                end
+            end,
+        }
+    end
+
+    return items
+end
+
+if BazCore and BazCore.RegisterContextMenuSection then
+    BazCore:RegisterContextMenuSection("chat-tab", "BazChat", GetBazChatSection)
+end
+
+---------------------------------------------------------------------------
 -- DB / window-list accessors
 --
 -- These mirror the helpers in Window.lua. Both addon.db and
@@ -354,13 +408,19 @@ function Tabs:AddFor(window, index, label)
     if tab and addon.AutoHide then
         addon.AutoHide:WireTab(tab)
     end
-    -- Right-click on a tab opens the channel popup. HookScript composes
-    -- with the template's existing OnMouseUp and TabDrag's hooks (both
-    -- only act on LeftButton, so RightButton is free for us).
-    if tab and addon.Channels then
+    -- Shift+right-click on a tab opens BazCore's shared context menu
+    -- (scope "chat-tab"). BazChat contributes Channels / Clear / Delete
+    -- to that menu via RegisterContextMenuSection further down; other
+    -- addons can append their own entries against the same scope.
+    -- Plain right-click is intentionally left alone now that the
+    -- channel popup lives inside the menu.
+    if tab then
         tab:HookScript("OnMouseUp", function(self, button)
-            if button == "RightButton" then
-                addon.Channels:ShowPopup(self, index)
+            if button == "RightButton" and IsShiftKeyDown() and BazCore.OpenContextMenu then
+                BazCore:OpenContextMenu("chat-tab", self, {
+                    tab   = self,
+                    index = index,
+                })
             end
         end)
     end

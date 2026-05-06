@@ -1,5 +1,16 @@
 # BazChat Changelog
 
+## 031 — Chat tab shift+right-click menu
+
+Right-clicking a chat tab used to immediately open the channel popup.
+Now it does nothing on its own; **shift+right-click** opens BazCore's
+shared context menu (scope `chat-tab`, BazCore 116+) where the same
+"Channels..." entry lives, alongside "Clear messages" and "Delete
+tab" (only on tabs after the first).
+
+Other addons can extend the menu by registering against the same
+scope without BazChat needing to know about them.
+
 ## 030 — User guide refresh
 
 The in-game User Manual page got a top-down rewrite. The "Architecture"

@@ -180,6 +180,21 @@ function AutoHide:WireWindow(f)
     if not f._bcHoverTicker then
         f._bcHoverTicker = C_Timer.NewTicker(0.1, function()
             if not f or not f:IsShown() then return end
+            -- Popped windows manage their own visibility - they should
+            -- always show their chrome (the user explicitly detached
+            -- them). Skip the auto-hide fade logic and pin chrome
+            -- alpha to the user-configured bgAlpha so popped windows
+            -- inherit the same appearance as the dock.
+            if f._bcPopped then
+                local target = BgAlpha and BgAlpha() or 1
+                if f._bcChromeFrame and math.abs((f._bcChromeFrame:GetAlpha() or 0) - target) > 0.01 then
+                    f._bcChromeFrame:SetAlpha(target)
+                end
+                if f.ScrollBar and (f.ScrollBar:GetAlpha() or 0) < 1 then
+                    f.ScrollBar:SetAlpha(1)
+                end
+                return
+            end
             -- The chat assembly is the chat frame PLUS the tab strip.
             -- Treat hovering either as "over the chat" so a tab click /
             -- tab hover doesn't trip the fade-out timer on tab switch.

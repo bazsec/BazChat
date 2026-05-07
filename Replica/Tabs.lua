@@ -60,7 +60,10 @@ local function GetBazChatSection(ctx)
     }
 
     -- Pop out / Pop in toggle. The label flips based on the tab's
-    -- current popped state.
+    -- current popped state. Tab 1 (General) is the dock's anchor and
+    -- can't be popped, so the entry's only ever offered for idx > 1
+    -- (Pop in is offered if the tab somehow ends up popped anyway, so
+    -- the user always has a path back).
     if addon.Window and addon.Window.IsPopped then
         if addon.Window:IsPopped(idx) then
             items[#items + 1] = {
@@ -69,7 +72,7 @@ local function GetBazChatSection(ctx)
                     if addon.Window.PopIn then addon.Window:PopIn(idx) end
                 end,
             }
-        else
+        elseif idx > 1 then
             items[#items + 1] = {
                 label = "Pop out",
                 onClick = function()
@@ -249,8 +252,9 @@ function Tabs:UpdateVisibility()
 
     for idx, tab in ipairs(ts.tabs) do
         local ws     = p and p.windows and p.windows[idx]
-        -- Popped tabs are hidden from the strip - their floating
-        -- chrome's close button is the path back into the dock.
+        -- Popped tabs are hidden from the dock strip; the popped
+        -- window has its own standalone tab indicator above it
+        -- (Window.lua's _bazPopTab) so each tab shows exactly once.
         local should = ShouldShowTab(ws and ws.autoShow) and not (ws and ws.popped)
         if tab:IsShown() ~= should then
             tab:SetShown(should)
@@ -367,9 +371,32 @@ function Tabs:Ensure(firstWindow)
     -- editbox if isUserAction and the tab supports input. Returns
     -- false so SetTabVisuallySelected still runs.
     ts:SetTabSelectedCallback(function(tabID, isUserAction)
+        -- Clicking a popped tab in the strip re-docks it: the user
+        -- has clearly chosen this tab as their active view, so pop
+        -- it back into the dock first, then proceed with normal
+        -- show/hide. Without this, clicking a popped tab would hide
+        -- the floating window AND fail to show the docked one
+        -- (because the frame is still popped-out at a remote anchor).
+        if isUserAction and addon.Window and addon.Window.IsPopped
+           and addon.Window:IsPopped(tabID) and addon.Window.PopIn then
+            addon.Window:PopIn(tabID)
+        end
+
+        -- Clicking any tab in the dock strip makes the dock the
+        -- active container. PopIn already does this when re-docking
+        -- via tab-click, but we also handle the plain "click another
+        -- dock tab" case here.
+        if isUserAction and addon.Window and addon.Window.SetActiveContainer then
+            addon.Window:SetActiveContainer(nil)
+        end
         for idx, win in pairs(WindowList()) do
-            local active = idx == tabID
-            win:SetShown(active)
+            -- Popped windows live independently of the dock's active
+            -- tab - they stay shown at their floating position
+            -- regardless of which dock tab is selected.
+            if not (addon.Window and addon.Window.IsPopped and addon.Window:IsPopped(idx)) then
+                local active = idx == tabID
+                win:SetShown(active)
+            end
             if win.editBox then win.editBox:Hide() end
         end
 

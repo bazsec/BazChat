@@ -1,5 +1,34 @@
 # BazChat Changelog
 
+## 033 — Pop-out polish + focus tracking
+
+Pop-out got a substantial round of fixes. Single-tab popped windows
+are now feature-equivalent to a docked tab in every visible way:
+
+- The popped window's resize handle resizes the popped window (used
+  to resize the dock — leftover from BazChat's docked-resize wiring).
+- Edit-mode popup on a popped window shows the same SettingsSpec
+  fields as the main dock (Text Opacity, Background Opacity, Scale,
+  visibility modes, fade timing, etc.) instead of an empty form.
+- Popped chrome respects the user-configured `bgAlpha` instead of
+  forcing alpha to 1, so popped windows match the dock's appearance.
+- Reload re-pops every window that was popped at logout (used to
+  silently re-dock during a recovery period while pop-out was being
+  debugged).
+- Focus tracking: only one container (the dock or a popped window)
+  is "active" at any moment. Active container's tab strip shows the
+  selected tab highlighted; inactive containers' tabs visually
+  deselect. Pressing Enter or "/" routes to the active container's
+  editbox via DEFAULT_CHAT_FRAME / SELECTED_CHAT_FRAME / LAST_ACTIVE_-
+  CHAT_EDIT_BOX, so typing always lands where the user is looking.
+- Clicking a dock tab keeps every popped window visible (used to
+  hide popped windows because the SetShown loop didn't skip them).
+
+Multi-tab popped windows (each popped window as a true mini-dock
+with its own + button feeding tabs into that container) is the next
+focused refactor — needs CreateDock turned into a factory so popped
+containers go through the same code path as the main dock.
+
 ## 032 — Pop tabs out of the dock
 
 A chat tab can now detach from the main dock and float as its own

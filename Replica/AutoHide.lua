@@ -184,8 +184,10 @@ function AutoHide:WireWindow(f)
             -- always show their chrome (the user explicitly detached
             -- them). Skip the auto-hide fade logic and pin chrome
             -- alpha to the user-configured bgAlpha so popped windows
-            -- inherit the same appearance as the dock.
-            if f._bcPopped then
+            -- inherit the same appearance as the dock. _dockID is set
+            -- by Window:Create / MoveTabToDock; "dock" or nil means
+            -- the chat is in the main dock.
+            if f._dockID and f._dockID ~= "dock" then
                 local target = BgAlpha and BgAlpha() or 1
                 if f._bcChromeFrame and math.abs((f._bcChromeFrame:GetAlpha() or 0) - target) > 0.01 then
                     f._bcChromeFrame:SetAlpha(target)

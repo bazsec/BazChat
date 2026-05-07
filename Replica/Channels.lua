@@ -731,9 +731,11 @@ local function EnsurePopup()
         local ws = p and p.windows and p.windows[idx]
         if ws and newLabel and newLabel ~= "" then
             ws.label = newLabel
-            -- Refresh the tab button label.
-            if addon.Tabs and addon.Tabs.system and addon.Tabs.system.tabs then
-                local tab = addon.Tabs.system.tabs[idx]
+            -- Refresh the tab button label. Tab may live on the main
+            -- dock's strip or on a popped container's strip; GetTabFor
+            -- scans every dock instance.
+            if addon.Tabs and addon.Tabs.GetTabFor then
+                local tab = addon.Tabs:GetTabFor(idx)
                 if tab and tab.Init then tab:Init(idx, newLabel) end
             end
             -- Refresh options page if it's open.

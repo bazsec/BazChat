@@ -40,6 +40,21 @@ local DEFAULTS = {
     -- in-session list.
     typedHistory = {},
 
+    -- Per-container geometry (position + size). Each tab is bound to
+    -- a dock container via windows[idx].dockID; the dock container's
+    -- own pos/size lives here. "dock" is the canonical main dock; any
+    -- popped chat window allocates its own entry on pop-out (key like
+    -- "pop:1234567890"). Width/height/pos used to live on windows[1];
+    -- they migrate into docks.dock on first load post-upgrade so the
+    -- user's existing dock geometry is preserved.
+    docks = {
+        dock = {
+            pos    = nil,
+            width  = 440,
+            height = 120,
+        },
+    },
+
     -- Per-replica-window appearance + behavior. Phase 3 has one
     -- window; Phase 5 will expand this to an array indexed by tab
     -- order. The Settings page and the Edit Mode popup BOTH bind to
@@ -48,14 +63,21 @@ local DEFAULTS = {
     windows = {
         [1] = {
             label            = "General",
+            -- Container the tab lives in. "dock" is the main dock;
+            -- popped containers use ids like "pop:<n>". Drives both
+            -- which strip the tab renders in and which container's
+            -- frame the chat is anchored to.
+            dockID           = "dock",
             -- "GENERAL" = subscribe to every CHAT_MSG_* event.
             -- "GUILD"   = subscribe only to guild-related events.
             -- "COMBAT"  = subscribe only to combat / loot / xp events.
             -- See CHAT_EVENT_GROUPS in Replica/Window.lua.
             eventGroup       = "GENERAL",
 
-            -- Geometry. Position is set by the user via Edit Mode
-            -- after first drag (nil = use the BOTTOMLEFT default).
+            -- Legacy geometry block. Pre-multi-dock these were the
+            -- canonical dock geometry; today they are migrated into
+            -- DEFAULTS.docks.dock on first load and ignored thereafter.
+            -- Kept around so the migration has something to copy from.
             pos              = nil,
             width            = 440,
             height           = 120,
@@ -114,6 +136,7 @@ local DEFAULTS = {
         -- window 1 (Window:Create anchors index>1 relative to [1]).
         [2] = {
             label            = "Guild",
+            dockID           = "dock",
             eventGroup       = "GUILD",
             pos              = nil,
             width            = 440,
@@ -164,6 +187,7 @@ local DEFAULTS = {
         -- player is in one (falls back to SAY otherwise).
         [3] = {
             label            = "Trade",
+            dockID           = "dock",
             eventGroup       = "LOOT",
             pos              = nil,
             width            = 440,
@@ -214,6 +238,7 @@ local DEFAULTS = {
         -- minus the low-level COMBAT_LOG_EVENT itself.
         [4] = {
             label            = "Log",
+            dockID           = "dock",
             eventGroup       = "LOG",
             pos              = nil,
             width            = 440,
@@ -371,14 +396,59 @@ local core = BazCore:RegisterAddon(addonName, {
         clear = {
             desc    = "Clear the active chat window (and its persisted history)",
             handler = function()
-                local ts = addon.Tabs and addon.Tabs.system
-                local idx = ts and ts.selectedTabID or 1
+                local idx = (addon.Window and addon.Window.GetActiveWindowIdx
+                             and addon.Window:GetActiveWindowIdx()) or 1
                 local f   = addon.Window and addon.Window:Get(idx)
                 if f and f.Clear then f:Clear() end
                 local p = (addon.db and addon.db.profile)
                     or (addon.core and addon.core.db and addon.core.db.profile)
                 if p and p.windows and p.windows[idx] then
                     p.windows[idx].history = nil
+                end
+            end,
+        },
+
+        activeinfo = {
+            desc    = "Diagnostic: print active container + chat-routing state",
+            handler = function()
+                local W = addon.Window
+                if not (W and addon.core) then return end
+                local p = function(s) addon.core:Print(s) end
+                local nameOf = function(f)
+                    if not f then return "<nil>" end
+                    return f.GetName and f:GetName() or tostring(f)
+                end
+
+                p("|cffffd100--- BazChat activeinfo ---|r")
+                p("Window.activeContainer = " .. tostring(W.activeContainer))
+                p("DEFAULT_CHAT_FRAME  = " .. nameOf(_G.DEFAULT_CHAT_FRAME))
+                p("SELECTED_CHAT_FRAME = " .. nameOf(_G.SELECTED_CHAT_FRAME))
+                p("SELECTED_DOCK_FRAME = " .. nameOf(_G.SELECTED_DOCK_FRAME))
+                p("LAST_ACTIVE_CHAT_EDIT_BOX = " .. nameOf(_G.LAST_ACTIVE_CHAT_EDIT_BOX))
+                p("ACTIVE_CHAT_EDIT_BOX = " .. nameOf(_G.ACTIVE_CHAT_EDIT_BOX))
+
+                local s = W._chatHookStats or {}
+                p(string.format(
+                    "hooks installed=%s | ChooseBox calls=%d (routed=%d) | OpenChat calls=%d (routed=%d) | ActivateChat calls=%d last=%s",
+                    tostring(W._chatRoutingHookInstalled),
+                    s.chooseBox or 0, s.chooseBoxRouted or 0,
+                    s.openChat or 0, s.openChatRouted or 0,
+                    s.activateChat or 0, tostring(s.activateChatLast)))
+
+                local activeIdx = W:GetActiveWindowIdx()
+                p("GetActiveWindowIdx()  = " .. tostring(activeIdx))
+                local activeWin = W:Get(activeIdx)
+                p("active win frame      = " .. nameOf(activeWin))
+                p("active win editBox    = "
+                  .. nameOf(activeWin and activeWin.editBox))
+
+                if W.docks then
+                    for id, inst in pairs(W.docks) do
+                        local sel = inst.tabSystem and inst.tabSystem.selectedTabID or "?"
+                        p(string.format(
+                            "  dock[%s] frame=%s selectedTabID=%s",
+                            id, nameOf(inst.frame), tostring(sel)))
+                    end
                 end
             end,
         },
@@ -408,8 +478,8 @@ local core = BazCore:RegisterAddon(addonName, {
                     end
                 end
                 -- Active editbox state.
-                local ts  = addon.Tabs and addon.Tabs.system
-                local tid = ts and ts.selectedTabID or 1
+                local tid = (addon.Window and addon.Window.GetActiveWindowIdx
+                             and addon.Window:GetActiveWindowIdx()) or 1
                 local f   = addon.Window and addon.Window:Get(tid)
                 if f and f.editBox then
                     local altMode = f.editBox.GetAltArrowKeyMode
@@ -451,8 +521,8 @@ addon.core = core
 -- We avoid claiming "/clear" because that's commonly used by other
 -- addons. The handler reuses the same logic as the /bc clear sub-cmd.
 local function ClearActiveTab()
-    local ts = addon.Tabs and addon.Tabs.system
-    local idx = ts and ts.selectedTabID or 1
+    local idx = (addon.Window and addon.Window.GetActiveWindowIdx
+                 and addon.Window:GetActiveWindowIdx()) or 1
     local f   = addon.Window and addon.Window:Get(idx)
     if f and f.Clear then f:Clear() end
     local p = (addon.db and addon.db.profile)

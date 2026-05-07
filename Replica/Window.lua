@@ -128,182 +128,274 @@ end
 -- The dock zone-watcher in Window:CreateDock calls it on zone changes.
 
 ---------------------------------------------------------------------------
--- Dock root
+-- Dock instances
 --
--- An invisible always-shown Frame that owns the chat dock's position.
--- All chat windows SetAllPoints to it, the TabSystem anchors to it,
--- and Edit Mode registers ONLY the dock (not individual windows). So
--- dragging in Edit Mode moves the dock, and every chat window + the
--- tab strip follow rigidly via static anchors. No more "teleport"
--- snapping after a drag of a non-General tab.
+-- A "dock instance" is an invisible always-shown Frame that owns its
+-- container's position. Every chat window SetAllPoints to its dock
+-- instance's frame; the matching TabSystem strip anchors to it; Edit
+-- Mode registers each dock (not individual chat windows). So dragging
+-- in Edit Mode moves the dock, and every chat window + the tab strip
+-- follow rigidly via static anchors. No more "teleport" snapping
+-- after a drag of a non-General tab.
+--
+-- Today there are two kinds of dock instance:
+--   id "dock"      - the main dock; created on first call by Window:Create
+--   id "pop:<n>"   - a popped-out floating mini-dock; created by PopOut
+--
+-- Each tab carries a windows[idx].dockID field that tags it to its
+-- container. Tabs:AddFor uses that field to add the tab to the right
+-- strip; chat windows SetAllPoints to that dockID's frame. Both kinds
+-- go through Window:CreateDockInstance(id, opts) so chrome / strip /
+-- edit-mode behaviour matches between the dock and any popped window.
+--
+-- Window.dock stays as a back-compat alias for the main dock's frame
+-- (used by AutoHide, CombatLog, TabDrag, the old Tabs:Ensure anchor,
+-- and a few slash commands - they all expect the singleton).
 ---------------------------------------------------------------------------
 
-function Window:CreateDock()
-    if Window.dock then return Window.dock end
-    local dock = CreateFrame("Frame", "BazChatDock", UIParent)
-    -- Explicitly start in non-Edit-Mode state. Edit Mode entry sets
-    -- this to true; exit clears it. Defensive init in case anything
-    -- ever reads _inEditMode before the user's first Edit Mode toggle.
-    dock._inEditMode = false
+Window.docks = {}   -- dockID -> instance struct
 
-    -- Read saved size from windows[1] (canonical), fall back to defaults.
-    local ws = WindowDB(1)
-    dock:SetSize(
-        (ws and ws.width)  or FALLBACKS.width,
-        (ws and ws.height) or FALLBACKS.height
-    )
+-- Per-instance settings accessor. Reads from profile.docks[id], creating
+-- the slot lazily so writes always have somewhere to land.
+local function GetDockSettings(id)
+    local p = GetProfile()
+    if not p then return nil end
+    p.docks = p.docks or {}
+    p.docks[id] = p.docks[id] or {}
+    return p.docks[id]
+end
 
-    -- Read saved position from windows[1].pos. Fall back to default
-    -- BOTTOMLEFT(32, 70) anchor if missing.
-    if ws and ws.pos and ws.pos.point then
-        dock:SetPoint(ws.pos.point, _G[ws.pos.relTo or "UIParent"] or UIParent,
-            ws.pos.relPoint or ws.pos.point, ws.pos.x or 0, ws.pos.y or 0)
-    else
-        dock:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 32, 70)
+-- Returns the live profile.windows entry for a window, or nil.
+local function WindowProfile(idx)
+    local p = GetProfile()
+    return p and p.windows and p.windows[idx] or nil
+end
+
+-- Resolves a window index's dockID, defaulting to "dock" if the field
+-- is missing (pre-migration saves or hand-edited DBs).
+local function DockIDForWindow(idx)
+    local ws = WindowProfile(idx)
+    return (ws and ws.dockID) or "dock"
+end
+
+-- All currently-live window indices in a given dock instance.
+local function WindowsInDock(id)
+    local out = {}
+    for idx, _ in pairs(windows) do
+        if DockIDForWindow(idx) == id then
+            out[#out + 1] = idx
+        end
     end
+    table.sort(out)
+    return out
+end
 
-    -- Persist size on every resize. Hooks both manual SetSize calls
-    -- and the resize-handle drag (the OnSizeChanged event fires for
-    -- both). Round to ints so the saved values stay clean.
-    dock:SetScript("OnSizeChanged", function(self, w, h)
-        local pdb = WindowDB(1)
-        if not pdb then return end
-        pdb.width  = math.floor((w or 0) + 0.5)
-        pdb.height = math.floor((h or 0) + 0.5)
-    end)
-
-    -- Make the dock movable + resizable by Edit Mode and by our
-    -- chat-frame's resize-button proxy. The chat windows are
-    -- SetAllPoints'd to the dock, so resizing the dock cascades
-    -- through tabs + windows + chrome.
-    dock:SetMovable(true)
-    dock:SetResizable(true)
-    -- Intentionally NOT clamped to the screen - the user prefers
-    -- being able to drag the chat right up against (or even past)
-    -- a screen edge for tucked-away layouts. If we ever want a
-    -- safety net, this is where SetClampedToScreen / SetClampRectInsets
-    -- would go.
-    if dock.SetResizeBounds then
-        dock:SetResizeBounds(250, 80, 1200, 800)
-    end
-
-    Window.dock = dock
-
-    -- Listen for state changes that drive Tabs:UpdateVisibility (the
-    -- generic autoShow predicate). City detection covers the original
-    -- Trade-tab use case; combat/group/instance events let users opt
-    -- tabs into "only show during raid", "only show in combat", etc.
-    --   Zone events  -> autoShow="city" / "instance" / "pvp"
-    --   Combat events -> autoShow="combat"
-    --   Roster event  -> autoShow="party" / "raid"
-    if not Window._zoneWatcher then
-        local f = CreateFrame("Frame")
-        Window._zoneWatcher = f
-        f:RegisterEvent("PLAYER_ENTERING_WORLD")
-        f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
-        f:RegisterEvent("ZONE_CHANGED")
-        f:RegisterEvent("ZONE_CHANGED_INDOORS")
-        f:RegisterEvent("CHANNEL_UI_UPDATE")
-        f:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
-        f:RegisterEvent("PLAYER_UPDATE_RESTING")
-        f:RegisterEvent("PLAYER_REGEN_ENABLED")    -- combat ends
-        f:RegisterEvent("PLAYER_REGEN_DISABLED")   -- combat starts
-        f:RegisterEvent("GROUP_ROSTER_UPDATE")     -- party/raid change
-        -- Watcher body wrapped in securecallfunction so any string ops
-        -- it does on potentially-secret chat data (channel names from
-        -- cross-realm contexts, etc.) don't taint the dispatch context
-        -- shared with other frames' OnEvent scripts. CHAT_MSG_CHANNEL_-
-        -- NOTICE is registered here too - the chat frame's MessageEvent-
-        -- Handler runs for the SAME event in the same dispatch, and
-        -- without isolation our taint contaminates its later secure
-        -- calls (RemoveExtraSpaces, ReplaceIconAndGroupExpressions).
-        local function ZoneWatcherBody()
-            if addon.Tabs then addon.Tabs:UpdateVisibility() end
-            if addon.Channels and addon.Channels.RefreshChannelList then
-                local p = (addon.db and addon.db.profile)
-                    or (addon.core and addon.core.db and addon.core.db.profile)
-                local list = (addon.Window and addon.Window.list) or {}
-                for idx, win in pairs(list) do
-                    local ws = p and p.windows and p.windows[idx]
-                    if ws then
-                        addon.Channels:RefreshChannelList(win, ws)
-                    end
+-- The zone-watcher is a singleton concern (one set of WoW events for
+-- the whole addon, not per-dock). Lifted out of CreateDockInstance so
+-- creating the second dock doesn't double-register events.
+local function InstallZoneWatcherOnce()
+    if Window._zoneWatcher then return end
+    local f = CreateFrame("Frame")
+    Window._zoneWatcher = f
+    f:RegisterEvent("PLAYER_ENTERING_WORLD")
+    f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+    f:RegisterEvent("ZONE_CHANGED")
+    f:RegisterEvent("ZONE_CHANGED_INDOORS")
+    f:RegisterEvent("CHANNEL_UI_UPDATE")
+    f:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
+    f:RegisterEvent("PLAYER_UPDATE_RESTING")
+    f:RegisterEvent("PLAYER_REGEN_ENABLED")    -- combat ends
+    f:RegisterEvent("PLAYER_REGEN_DISABLED")   -- combat starts
+    f:RegisterEvent("GROUP_ROSTER_UPDATE")     -- party/raid change
+    -- Watcher body wrapped in securecallfunction so any string ops
+    -- it does on potentially-secret chat data (channel names from
+    -- cross-realm contexts, etc.) don't taint the dispatch context
+    -- shared with other frames' OnEvent scripts. CHAT_MSG_CHANNEL_-
+    -- NOTICE is registered here too - the chat frame's MessageEvent-
+    -- Handler runs for the SAME event in the same dispatch, and
+    -- without isolation our taint contaminates its later secure
+    -- calls (RemoveExtraSpaces, ReplaceIconAndGroupExpressions).
+    local function ZoneWatcherBody()
+        if addon.Tabs then addon.Tabs:UpdateVisibility() end
+        if addon.Channels and addon.Channels.RefreshChannelList then
+            local p = GetProfile()
+            local list = (addon.Window and addon.Window.list) or {}
+            for idx, win in pairs(list) do
+                local ws = p and p.windows and p.windows[idx]
+                if ws then
+                    addon.Channels:RefreshChannelList(win, ws)
                 end
             end
         end
-        local secureCall = securecallfunction
-        f:SetScript("OnEvent", function()
-            if secureCall then
-                secureCall(ZoneWatcherBody)
-            else
-                ZoneWatcherBody()
-            end
-        end)
+    end
+    local secureCall = securecallfunction
+    f:SetScript("OnEvent", function()
+        if secureCall then
+            secureCall(ZoneWatcherBody)
+        else
+            ZoneWatcherBody()
+        end
+    end)
+end
+
+-- Factory: build a dock instance with the given id, or return the one
+-- already registered. opts honors:
+--   label           - override Edit Mode label (defaults to a per-id name)
+--   defaultPos      - { point, relPoint, x, y } used when docks[id].pos
+--                     is missing (per-id default for fresh popouts)
+--   defaultSize     - { w, h } used when docks[id].width/height missing
+function Window:CreateDockInstance(id, opts)
+    if Window.docks[id] then return Window.docks[id] end
+    opts = opts or {}
+
+    local instance = { id = id, _inEditMode = false }
+    -- Frame name has to be a valid Lua identifier; dockIDs use ":" so
+    -- swap to "_" before stitching it into the global frame name.
+    local safeID = (id or "dock"):gsub("[^%w_]", "_")
+    local frame = CreateFrame("Frame", "BazChatDock_" .. safeID, UIParent)
+    instance.frame = frame
+    frame._dockInstance = instance
+    -- Mirror _inEditMode onto the frame so back-compat callers that
+    -- read Window.dock._inEditMode (AutoHide, syncBg, the Tabs click
+    -- callback) keep working without per-instance plumbing.
+    frame._inEditMode = false
+
+    -- Read saved size from docks[id], fall back to defaults. Popped
+    -- instances get a larger default than the main dock's narrow chat
+    -- bar so the floating window has enough room to read messages
+    -- without immediately needing a resize.
+    local ds = GetDockSettings(id) or {}
+    local defaultSize = opts.defaultSize or {}
+    local fallbackW = (id == "dock") and FALLBACKS.width  or 420
+    local fallbackH = (id == "dock") and FALLBACKS.height or 240
+    local sizeW = ds.width  or defaultSize.w or fallbackW
+    local sizeH = ds.height or defaultSize.h or fallbackH
+    frame:SetSize(sizeW, sizeH)
+
+    -- Read saved position. Per-id defaults: the main dock anchors
+    -- BOTTOMLEFT in the typical chat corner; popped instances default
+    -- to true screen-center (computed from the frame's actual size so
+    -- the offsets stay correct regardless of fallbackW/fallbackH or
+    -- a user-customized defaultSize). TOPLEFT anchor specifically -
+    -- the BOTTOMRIGHT resize handle needs a fixed top-left corner to
+    -- drag against; CENTER-anchored frames behave oddly during
+    -- StartSizing.
+    local pos = ds.pos
+    if pos and pos.point then
+        frame:SetPoint(pos.point, _G[pos.relTo or "UIParent"] or UIParent,
+            pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
+    elseif opts.defaultPos and opts.defaultPos.point then
+        local d = opts.defaultPos
+        frame:SetPoint(d.point, _G[d.relTo or "UIParent"] or UIParent,
+            d.relPoint or d.point, d.x or 0, d.y or 0)
+    elseif id == "dock" then
+        frame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 32, 70)
+    else
+        -- Center the popped window on the screen: TOPLEFT lands at
+        -- (screenCenterX - width/2, screenCenterY + height/2) which
+        -- puts the frame's geometric center exactly at UIParent's
+        -- center.
+        frame:SetPoint("TOPLEFT", UIParent, "CENTER",
+                       -sizeW / 2, sizeH / 2)
     end
 
-    -- Register the dock with Edit Mode for drag-to-position +
-    -- per-frame settings. The settings array is built from the unified
-    -- SettingsSpec (Replica/SettingsSpec.lua) via BazCore - so this
-    -- panel and the Options page (Options/Settings.lua) read from the
-    -- same source-of-truth and can't drift apart. Edit Mode only sees
-    -- the entries tagged with surfaces.editMode = true (visual-first
-    -- tweaks); configuration-heavy stuff (history buffer, fade timing,
-    -- timestamps) lives only in the Options page.
+    -- Persist size on every resize. Hooks both manual SetSize calls
+    -- and the resize-handle drag (OnSizeChanged fires for both). Round
+    -- to ints so the saved values stay clean.
+    frame:SetScript("OnSizeChanged", function(self, w, h)
+        local d = GetDockSettings(id)
+        if not d then return end
+        d.width  = math.floor((w or 0) + 0.5)
+        d.height = math.floor((h or 0) + 0.5)
+    end)
+
+    -- Movable + resizable by Edit Mode and by the chat-frame's
+    -- resize-button proxy. Chat windows in this container SetAllPoints
+    -- to this frame, so resizing this frame cascades through tabs +
+    -- windows + chrome.
+    frame:SetMovable(true)
+    frame:SetResizable(true)
+    -- Intentionally NOT clamped to the screen - the user prefers
+    -- being able to drag the chat right up against (or even past)
+    -- a screen edge for tucked-away layouts.
+    if frame.SetResizeBounds then
+        frame:SetResizeBounds(250, 80, 1200, 800)
+    end
+
+    Window.docks[id] = instance
+    if id == "dock" then Window.dock = frame end   -- back-compat alias
+
+    InstallZoneWatcherOnce()
+
+    -- Register with Edit Mode for drag-to-position + per-frame
+    -- settings popup. The settings array is built from the unified
+    -- SettingsSpec (Replica/SettingsSpec.lua) via BazCore so this
+    -- popup and the Options page read from the same source.
     if BazCore and BazCore.RegisterEditModeFrame then
-        BazCore:RegisterEditModeFrame(dock, {
-            label       = "BazChat",
+        local label = opts.label
+            or (id == "dock" and "BazChat" or "BazChat: " .. id)
+
+        local actions = {
+            { label = "Open BazChat Settings",
+              onClick = function()
+                  if BazCore.OpenOptionsPanel then
+                      BazCore:OpenOptionsPanel("BazChat")
+                  end
+              end },
+            { label = "Revert Changes", builtin = "revert" },
+        }
+        -- Popped instances also expose a "Pop in" path so the user
+        -- can re-dock from the edit-mode popup without going through
+        -- the tab context menu.
+        if id ~= "dock" then
+            table.insert(actions, 1, {
+                label = "Pop all tabs back to dock",
+                onClick = function() Window:DockInstance(id) end,
+            })
+        end
+
+        BazCore:RegisterEditModeFrame(frame, {
+            label       = label,
             addonName   = "BazChat",
             positionKey = false,
 
             settings = (BazCore.BuildEditModeArrayFromSpec
                 and BazCore:BuildEditModeArrayFromSpec("BazChat")) or {},
 
-            actions = {
-                { label = "Open BazChat Settings",
-                  onClick = function()
-                      if BazCore.OpenOptionsPanel then
-                          BazCore:OpenOptionsPanel("BazChat")
-                      end
-                  end },
-                { label = "Revert Changes", builtin = "revert" },
-            },
-            onPositionChanged = function(frame)
-                local point, _, relPoint, x, y = frame:GetPoint()
+            actions = actions,
+
+            onPositionChanged = function(f)
+                local point, _, relPoint, x, y = f:GetPoint()
                 if not point then return end
-                local pdb = WindowDB(1)
-                if pdb then
-                    pdb.pos = { point = point, relPoint = relPoint,
-                                x = x, y = y }
+                local d = GetDockSettings(id)
+                if d then
+                    d.pos = { point = point, relPoint = relPoint,
+                              x = x, y = y }
                 end
             end,
             onEnter = function()
-                Window.dock._inEditMode = true
+                instance._inEditMode = true
+                frame._inEditMode    = true
                 -- Defensive re-anchor: if anything ever broke the
-                -- SetAllPoints(dock) relationship (e.g. an old save
+                -- SetAllPoints(frame) relationship (e.g. an old save
                 -- where the chat had standalone anchors, or a stray
                 -- StartMoving on the chat itself), pull every chat
-                -- window back onto the dock. Otherwise dragging the
-                -- dock in Edit Mode moves the highlight + tabs but
-                -- leaves the chat box stuck where it was.
-                -- Popped windows are intentionally detached from the
-                -- dock - skip them or entering edit mode would re-dock
-                -- every tab the user has popped out.
-                if Window.dock then
-                    for _, win in pairs(windows) do
-                        if win and not win._bcPopped then
-                            win:ClearAllPoints()
-                            win:SetAllPoints(Window.dock)
-                        end
+                -- window in THIS container back onto this dock frame.
+                -- Other containers' windows are left alone - their
+                -- own onEnter callback fires for them.
+                for _, idx in ipairs(WindowsInDock(id)) do
+                    local win = windows[idx]
+                    if win then
+                        win:ClearAllPoints()
+                        win:SetAllPoints(frame)
                     end
                 end
                 Window:ApplyAll()
-                -- Force-show the active window's editbox + its
+                -- Force-show this container's active editbox + its
                 -- backdrop so the user can see it while laying out.
-                -- syncBg honors _inEditMode now, but we trigger it
-                -- via a Hide/Show cycle on the editbox so its
-                -- OnShow handler re-evaluates and shows the bg.
-                for idx, win in pairs(windows) do
-                    if win:IsShown() and win.editBox then
+                for _, idx in ipairs(WindowsInDock(id)) do
+                    local win = windows[idx]
+                    if win and win:IsShown() and win.editBox then
                         local wDB = WindowDB(idx)
                         local readOnly = wDB and wDB.eventGroup == "LOG"
                         if not readOnly then
@@ -314,18 +406,57 @@ function Window:CreateDock()
                 end
             end,
             onExit = function()
-                Window.dock._inEditMode = false
+                instance._inEditMode = false
+                frame._inEditMode    = false
                 Window:ApplyAll()
-                -- Hide all editboxes back to their normal hide-until-
-                -- focus state when Edit Mode exits.
-                for _, win in pairs(windows) do
-                    if win.editBox then win.editBox:Hide() end
+                for _, idx in ipairs(WindowsInDock(id)) do
+                    local win = windows[idx]
+                    if win and win.editBox then win.editBox:Hide() end
                 end
             end,
         })
+        instance._editModeRegistered = true
     end
 
-    return dock
+    return instance
+end
+
+-- Back-compat shim. Old code calls Window:CreateDock() expecting the
+-- main dock's Frame back. Returns the same Frame the factory creates.
+function Window:CreateDock()
+    return Window:CreateDockInstance("dock").frame
+end
+
+-- Look up an existing dock instance by id. Returns nil if not yet
+-- created (callers that need the instance unconditionally should call
+-- CreateDockInstance instead).
+function Window:GetDockInstance(id)
+    return Window.docks[id or "dock"]
+end
+
+-- Tear down a popped dock instance (must not be the main "dock").
+-- Unregisters from Edit Mode, hides the frame, drops the entry from
+-- Window.docks. Profile.docks[id] is left intact so a future re-pop
+-- restores the same geometry; pass clearProfile=true to also wipe
+-- the saved geometry.
+function Window:DestroyDockInstance(id, clearProfile)
+    if id == "dock" then return false end
+    local inst = Window.docks[id]
+    if not inst then return false end
+    if inst._editModeRegistered and BazCore.UnregisterEditModeFrame then
+        BazCore:UnregisterEditModeFrame(inst.frame)
+        inst._editModeRegistered = false
+    end
+    if inst.tabSystem then inst.tabSystem:Hide() end
+    if inst.addBtn    then inst.addBtn:Hide()    end
+    inst.frame:Hide()
+    inst.frame:ClearAllPoints()
+    Window.docks[id] = nil
+    if clearProfile then
+        local p = GetProfile()
+        if p and p.docks then p.docks[id] = nil end
+    end
+    return true
 end
 
 ---------------------------------------------------------------------------
@@ -591,13 +722,16 @@ function Window:Create(index, opts)
     -- Use our XML template for the visual chrome + edit box + buttons.
     local f = CreateFrame("ScrollingMessageFrame", globalName, UIParent, "BazChatFrameTemplate")
 
-    -- Anchor every chat window to the dock root via SetAllPoints.
-    -- The dock owns the dock's position; chat windows just sit inside
-    -- it. Edit Mode drags the dock, so all windows + tabs move
+    -- Anchor every chat window to its container's dock root via
+    -- SetAllPoints. The container (main "dock" or a "pop:<n>" instance)
+    -- owns position + size; chat windows just sit inside it. Edit Mode
+    -- drags the container, so all windows + tabs in that container move
     -- together rigidly with no teleport / snap-back artifacts.
-    local dock = Window:CreateDock()
+    local dockID    = (ws and ws.dockID) or "dock"
+    local container = Window:CreateDockInstance(dockID).frame
     f:ClearAllPoints()
-    f:SetAllPoints(dock)
+    f:SetAllPoints(container)
+    f._dockID = dockID
     -- Only the first window is shown by default; the rest start hidden
     -- and the tab callback swaps them in. NB: ChatFrameEditBoxTemplate
     -- reparents itself to UIParent in its OnLoad, so hiding the chat
@@ -665,6 +799,18 @@ function Window:Create(index, opts)
             f.editBox:SetPoint("TOPLEFT",  f, "BOTTOMLEFT",   -7, 3)
             f.editBox:SetPoint("TOPRIGHT", f, "BOTTOMRIGHT",  25, 3)
             f.editBox:SetHeight(50)
+            -- Override editBox.chatFrame with the actual chat window.
+            -- The XML's OnLoad-append sets it to self:GetParent(),
+            -- which is UIParent (because ChatFrameEditBoxTemplate's
+            -- own OnLoad reparents the editbox to UIParent before our
+            -- append runs). Blizzard's ChatEdit_ActivateChat re-anchors
+            -- the editbox based on chatFrame; if chatFrame is UIParent,
+            -- the editbox lands at UIParent's BOTTOMLEFT (which happens
+            -- to coincide with the dock's default position - that's
+            -- why this never broke until pop-out moved the chat away
+            -- from the bottom-left). Setting chatFrame = f keeps the
+            -- editbox following its actual chat window in any container.
+            f.editBox.chatFrame = f
             -- Translucent dark backdrop INSIDE the editbox's visible
             -- border. Tied to FOCUS state, not just shown state -
             -- ChatEdit_DeactivateChat in modern WoW fades the editbox
@@ -692,6 +838,19 @@ function Window:Create(index, opts)
                 f.editBox:HookScript("OnShow", function(self)
                     HideEditBoxChrome(self)
                     syncBg(self)
+                    -- Defensive re-anchor on every show. Blizzard's
+                    -- ChatEdit_ActivateChat (or anything else that
+                    -- shows a chat editbox) may override our anchors
+                    -- with internal logic that targets ChatFrame1 or
+                    -- a fixed screen position. Re-asserting them in
+                    -- OnShow forces the editbox below its actual chat
+                    -- window regardless of what triggered the show.
+                    local cf = self.chatFrame
+                    if cf and cf ~= _G.UIParent and cf.GetName then
+                        self:ClearAllPoints()
+                        self:SetPoint("TOPLEFT",  cf, "BOTTOMLEFT",   -7, 3)
+                        self:SetPoint("TOPRIGHT", cf, "BOTTOMRIGHT",  25, 3)
+                    end
                 end)
                 -- OnHide: sync the backdrop, AND if Edit Mode is
                 -- active re-show on the next frame. ChatEdit_Deactivate
@@ -847,25 +1006,33 @@ function Window:Create(index, opts)
 
     -- Re-anchor + re-wire the ResizeButton. The XML has it driving
     -- chat-frame resize, but our chat windows are SetAllPoints to
-    -- the dock - resizing the chat directly would override that
-    -- anchor. Redirect drag to the DOCK so resize moves the whole
-    -- assembly. Position stays on chrome's bottom-right.
+    -- their container - resizing the chat directly would override
+    -- that anchor. Redirect drag to the container (the chat's dock
+    -- instance frame) so resize moves the whole assembly. The
+    -- container is resolved per-event so PopOut/PopIn re-routing
+    -- "just works" without rebinding the button on every migration.
     if f.ResizeButton and f._bcChromeFrame then
         f.ResizeButton:ClearAllPoints()
         f.ResizeButton:SetPoint("BOTTOMRIGHT", f._bcChromeFrame,
             "BOTTOMRIGHT", -2, 22)
         f.ResizeButton:SetFrameLevel((f:GetFrameLevel() or 5) + 10)
+        local function ContainerOf()
+            local inst = Window.docks[f._dockID or "dock"]
+            return inst and inst.frame or Window.dock
+        end
         f.ResizeButton:SetScript("OnMouseDown", function(self)
             self:SetButtonState("PUSHED", true)
             local hl = self:GetHighlightTexture()
             if hl then hl:Hide() end
-            if Window.dock then Window.dock:StartSizing("BOTTOMRIGHT") end
+            local c = ContainerOf()
+            if c then c:StartSizing("BOTTOMRIGHT") end
         end)
         f.ResizeButton:SetScript("OnMouseUp", function(self)
             self:SetButtonState("NORMAL", false)
             local hl = self:GetHighlightTexture()
             if hl then hl:Show() end
-            if Window.dock then Window.dock:StopMovingOrSizing() end
+            local c = ContainerOf()
+            if c then c:StopMovingOrSizing() end
         end)
     end
 
@@ -924,8 +1091,9 @@ function Window:Create(index, opts)
     -- Pointing these at our window 1 routes all of that through our
     -- replica instead. Window 2+ stay subscribers only.
     if index == 1 then
-        DEFAULT_CHAT_FRAME = f
+        DEFAULT_CHAT_FRAME  = f
         SELECTED_CHAT_FRAME = f
+        SELECTED_DOCK_FRAME = f   -- ChatEdit_ChooseBoxForSend prefers this
         if f.editBox then
             -- Make our editbox the canonical "last active" so pressing
             -- Enter immediately after /reload targets it. Without
@@ -1070,6 +1238,13 @@ Window.CANONICAL_WINDOWS = CANONICAL_WINDOWS
 -- canonical window into a saved DB that doesn't have it yet. Mirrors
 -- the values in DEFAULTS.windows[*] in Core/Init.lua.
 local CANONICAL_WINDOW_DEFAULTS = {
+    -- Container the tab lives in. New canonical tabs always start
+    -- docked; user can pop them out later.
+    dockID           = "dock",
+    -- Legacy geometry fields, kept so the multi-dock migration can
+    -- read pre-upgrade values out of windows[1]. New canonicals don't
+    -- use these for layout - their container's docks[dockID] entry is
+    -- the source of truth.
     pos              = nil,
     width            = 440,
     height           = 120,
@@ -1090,12 +1265,95 @@ local CANONICAL_WINDOW_DEFAULTS = {
     messageSpacing   = 3,
 }
 
+---------------------------------------------------------------------------
+-- One-shot profile migration: pre-multi-dock saves stored dock geometry
+-- (pos/width/height) on windows[1] and used a windows[idx].popped boolean
+-- + windows[idx].popPos block for popped tabs. Multi-dock moves all
+-- container geometry into profile.docks[id] and tags each tab with
+-- windows[idx].dockID so the same code path handles main + popped docks.
+--
+-- Idempotent. Runs every CreateAll but skips fields that already exist,
+-- so /reload doesn't disturb the post-migration state.
+---------------------------------------------------------------------------
+
+local function MigrateProfileForMultiDock(p)
+    if not p then return end
+    if p._multiDockMigrated then return end   -- one-shot
+    p.windows = p.windows or {}
+    p.docks   = p.docks   or {}
+
+    -- 1. Seed the canonical "dock" entry from windows[1] geometry.
+    -- BazCore's profile-defaults merge has already filled p.docks.dock
+    -- with default values (440 / 120 / nil pos), so we MUST overwrite
+    -- when windows[1] has a user value - "if not dock.width" would
+    -- always be false post-merge. The one-shot sentinel above makes
+    -- this safe to do unconditionally on first load.
+    local dock = p.docks.dock or {}
+    p.docks.dock = dock
+    local w1 = p.windows[1]
+    if w1 then
+        if w1.pos    then dock.pos    = CopyTable(w1.pos) end
+        if w1.width  then dock.width  = w1.width          end
+        if w1.height then dock.height = w1.height         end
+        -- Clear the legacy fields. Subsequent loads see the data only
+        -- in docks.dock; the BazCore defaults merge would refill these
+        -- with the legacy defaults, but the migration sentinel keeps
+        -- us from copying back. The two values eventually drift and
+        -- only docks.dock is read by anything live.
+        w1.pos    = nil
+        w1.width  = nil
+        w1.height = nil
+    end
+    if not dock.width  then dock.width  = FALLBACKS.width  end
+    if not dock.height then dock.height = FALLBACKS.height end
+
+    -- 2. Migrate popped tabs into their own dock instances. The legacy
+    -- popped/popPos fields are cleared after migration so the new
+    -- code path is the only one reading container state.
+    for idx, ws in pairs(p.windows) do
+        if ws.popped and not ws.dockID then
+            local id = "pop:" .. tostring(idx)
+            -- Make sure we don't collide with an existing dock id (eg
+            -- from a partially-migrated save).
+            local n = 1
+            while p.docks[id] do
+                n = n + 1
+                id = "pop:" .. tostring(idx) .. "_" .. tostring(n)
+            end
+            local pp = ws.popPos or {}
+            p.docks[id] = {
+                pos = (pp.point and {
+                    point    = pp.point,
+                    relPoint = pp.relativePoint,
+                    x        = pp.x or 0,
+                    y        = pp.y or 0,
+                }) or nil,
+                width  = pp.w or FALLBACKS.width,
+                height = pp.h or FALLBACKS.height,
+            }
+            ws.dockID = id
+            ws.popped = nil
+            ws.popPos = nil
+        end
+    end
+
+    -- 3. Default every other tab to the main dock.
+    for _, ws in pairs(p.windows) do
+        if not ws.dockID then ws.dockID = "dock" end
+    end
+
+    p._multiDockMigrated = true
+end
+
 -- Create all windows. Called from Replica:Start after PLAYER_LOGIN.
 -- Walks CANONICAL_WINDOWS and ensures each entry exists in the DB
 -- (copying defaults for any missing one) before instantiating it.
 function Window:CreateAll()
     local p = GetProfile()
     if p then p.windows = p.windows or {} end
+
+    MigrateProfileForMultiDock(p)
+    Window:InstallChatRoutingHook()
 
     for idx, canon in ipairs(CANONICAL_WINDOWS) do
         -- Skip canonicals the user explicitly deleted via Tabs:DeleteTab
@@ -1203,8 +1461,11 @@ end
 --   * Pressing Enter / "/" while no editbox is open focuses this
 --     container's editbox
 --
--- Containers are: the dock (activeContainer == nil) and each popped
--- window (activeContainer == windowIdx).
+-- The active container is identified by its dockID: "dock" for the
+-- main dock, "pop:<n>" for a popped instance. Window.activeContainer
+-- holds that dockID. (Pre-multi-dock this was nil-or-windowIdx; legacy
+-- callers that pass nil mean "dock", and legacy callers that pass an
+-- int mean "the window's container" - both are coerced.)
 --
 -- Inactive containers' strips visually deselect all their tabs - even
 -- though their internal selectedTabID stays the same, so that when
@@ -1212,7 +1473,7 @@ end
 -- without losing track.
 ---------------------------------------------------------------------------
 
-Window.activeContainer = nil  -- nil = dock, otherwise window idx
+Window.activeContainer = "dock"
 
 local function VisualSelect(ts, selected)
     if not ts or not ts.tabs then return end
@@ -1225,34 +1486,62 @@ local function VisualSelect(ts, selected)
     end
 end
 
-function Window:SetActiveContainer(idx)
-    Window.activeContainer = idx
+function Window:SetActiveContainer(arg)
+    -- Coerce to a dockID string. nil -> "dock"; numeric idx -> the
+    -- window's current dockID; string -> use as-is.
+    local dockID
+    if arg == nil then
+        dockID = "dock"
+    elseif type(arg) == "number" then
+        dockID = DockIDForWindow(arg)
+    else
+        dockID = arg
+    end
 
-    -- Dock strip: highlight if dock is active, deselect otherwise.
-    local dockTS = addon.Tabs and addon.Tabs.system
-    VisualSelect(dockTS, idx == nil)
+    Window.activeContainer = dockID
 
-    -- Each popped window's mini strip: highlight only the active one.
-    for wIdx, win in pairs(windows) do
-        if win._bazPopTabSystem then
-            VisualSelect(win._bazPopTabSystem, wIdx == idx)
-        end
+    -- Walk every dock instance's strip; visually select only the
+    -- active container's strip.
+    for id, inst in pairs(Window.docks) do
+        VisualSelect(inst.tabSystem, id == dockID)
     end
 
     -- Route Blizzard's Enter / "/" keybinds to the active container's
-    -- chat frame. ChatFrame_OpenChat reads DEFAULT_CHAT_FRAME, and
+    -- selected tab's frame. ChatFrame_OpenChat reads DEFAULT_CHAT_FRAME;
     -- ChatEdit_ChooseBoxForSend falls back to LAST_ACTIVE_CHAT_EDIT_BOX -
     -- pointing both at the active container makes typing routing
     -- follow focus instead of always landing on window 1.
+    local inst = Window.docks[dockID]
+    local s    = inst and inst.tabSystem
     local activeFrame
-    if idx == nil then
-        activeFrame = windows[1]
-    else
+    if s and s.selectedTabID then
+        local idx = (addon.Tabs and addon.Tabs.WindowIdxOf
+                     and addon.Tabs:WindowIdxOf(s, s.selectedTabID))
+                    or s.selectedTabID
         activeFrame = windows[idx]
     end
+    if not activeFrame then
+        -- Fallback: any visible window in the container.
+        for _, idx in ipairs(WindowsInDock(dockID)) do
+            if windows[idx] and windows[idx]:IsShown() then
+                activeFrame = windows[idx]
+                break
+            end
+        end
+    end
+
     if activeFrame then
         DEFAULT_CHAT_FRAME  = activeFrame
         SELECTED_CHAT_FRAME = activeFrame
+        -- SELECTED_DOCK_FRAME is what ChatEdit_ChooseBoxForSend picks
+        -- BEFORE falling through to DEFAULT_CHAT_FRAME. Blizzard's
+        -- chat dock initializes it to ChatFrame1 at boot; we never
+        -- touched it pre-multi-dock because the dock + DEFAULT_CHAT_-
+        -- FRAME both happened to coincide with ChatFrame1's position.
+        -- Once a popped window is active and SELECTED_DOCK_FRAME is
+        -- still ChatFrame1, pressing Enter activates ChatFrame1's
+        -- editbox at the dock's location, not the popped window's.
+        SELECTED_DOCK_FRAME = activeFrame
         if activeFrame.editBox then
             LAST_ACTIVE_CHAT_EDIT_BOX = activeFrame.editBox
             if ACTIVE_CHAT_EDIT_BOX and ACTIVE_CHAT_EDIT_BOX ~= activeFrame.editBox then
@@ -1269,302 +1558,402 @@ function Window:GetActiveContainer()
     return Window.activeContainer
 end
 
+-- Returns the window index of whichever tab is selected on the
+-- currently active container's strip. Used by slash commands that
+-- operate on "the chat tab the user is looking at right now."
+-- Falls back to 1 (General) if anything's missing.
+function Window:GetActiveWindowIdx()
+    local id    = Window.activeContainer or "dock"
+    local inst  = Window.docks[id]
+    local strip = inst and inst.tabSystem
+    if strip and strip.selectedTabID then
+        return (addon.Tabs and addon.Tabs.WindowIdxOf
+                and addon.Tabs:WindowIdxOf(strip, strip.selectedTabID))
+            or strip.selectedTabID
+    end
+    return 1
+end
+
+---------------------------------------------------------------------------
+-- Chat routing hook
+--
+-- Pressing Enter / "/" calls ChatFrame_OpenChat which calls
+-- ChatEdit_ChooseBoxForSend(nil) to pick which editbox to activate.
+-- That function has a fallback chain - ChatEdit_GetActiveWindow,
+-- SELECTED_DOCK_FRAME, then DEFAULT_CHAT_FRAME - and on modern retail
+-- the SELECTED_DOCK_FRAME global is no longer the source of truth
+-- (Blizzard moved chat-dock state into FCFDock_GetSelectedWindow).
+-- Setting all three globals in SetActiveContainer was insufficient.
+--
+-- We wrap ChatEdit_ChooseBoxForSend instead. When called with no
+-- preferredChatFrame (the OPENCHAT keybind path), we substitute the
+-- active container's editbox. Explicit calls with a chatFrame
+-- argument fall through to the original so third-party addons that
+-- target a specific frame keep working.
+---------------------------------------------------------------------------
+
+-- Debug counters for the chat-routing hooks. Bumped each time a hook
+-- fires so /bc activeinfo can show whether they're being exercised.
+Window._chatHookStats = {
+    chooseBox        = 0,
+    chooseBoxRouted  = 0,
+    openChat         = 0,
+    openChatRouted   = 0,
+    activateChat     = 0,
+    activateChatLast = nil,   -- name of last editBox activated
+}
+
+function Window:InstallChatRoutingHook()
+    if Window._chatRoutingHookInstalled then return end
+    Window._chatRoutingHookInstalled = true
+    local stats = Window._chatHookStats
+
+    -- Hook 1: ChatEdit_ChooseBoxForSend - returns the editbox to
+    -- activate. Most chat code paths go through this. When called with
+    -- no preferred frame (the typical ChatFrame_OpenChat path), we
+    -- substitute the active container's editbox.
+    if type(_G.ChatEdit_ChooseBoxForSend) == "function" then
+        local original = _G.ChatEdit_ChooseBoxForSend
+        _G.ChatEdit_ChooseBoxForSend = function(preferredChatFrame)
+            stats.chooseBox = stats.chooseBox + 1
+            if not preferredChatFrame then
+                local idx = Window:GetActiveWindowIdx()
+                local f   = windows[idx]
+                if f and f.editBox then
+                    stats.chooseBoxRouted = stats.chooseBoxRouted + 1
+                    return f.editBox
+                end
+            end
+            return original(preferredChatFrame)
+        end
+    end
+
+    -- Hook 2: ChatFrame_OpenChat is what the OPENCHAT and
+    -- OPENCHATSLASH bindings call directly with chatFrame=nil. Modern
+    -- retail's implementation may bypass ChatEdit_ChooseBoxForSend in
+    -- some code paths and use SELECTED_DOCK_FRAME / ChatFrame1
+    -- directly. Rewriting the chatFrame argument before the original
+    -- runs guarantees the active container's frame is what gets
+    -- queried, regardless of internal fallback logic.
+    if type(_G.ChatFrame_OpenChat) == "function" then
+        local original = _G.ChatFrame_OpenChat
+        _G.ChatFrame_OpenChat = function(text, chatFrame, desiredCursorPosition)
+            stats.openChat = stats.openChat + 1
+            if not chatFrame then
+                local idx = Window:GetActiveWindowIdx()
+                chatFrame = windows[idx]
+                if chatFrame then
+                    stats.openChatRouted = stats.openChatRouted + 1
+                end
+            end
+            return original(text, chatFrame, desiredCursorPosition)
+        end
+    end
+
+    -- Hook 3: REPLACE ChatEdit_ActivateChat so we can substitute the
+    -- editbox argument before the original runs. Modern retail's
+    -- OPENCHAT binding bypasses ChatFrame_OpenChat / ChatEdit_Choose-
+    -- BoxForSend entirely - it walks CHAT_FRAMES, finds the first
+    -- visible one (which is our Window1 in the dock), and calls
+    -- ChatEdit_ActivateChat with that frame's editbox. Both pre-call
+    -- hooks miss it, so we intercept ActivateChat itself: if it's
+    -- handed one of OUR editboxes that doesn't match the active
+    -- container, we swap to the active one. Third-party calls with
+    -- non-BazChat editboxes pass through unchanged.
+    if type(_G.ChatEdit_ActivateChat) == "function" then
+        local original = _G.ChatEdit_ActivateChat
+        _G.ChatEdit_ActivateChat = function(editBox)
+            -- Is this one of our editboxes? If so, redirect to the
+            -- active container's editbox.
+            local isOurs = false
+            for _, w in pairs(windows) do
+                if w.editBox == editBox then isOurs = true break end
+            end
+            if isOurs then
+                local idx = Window:GetActiveWindowIdx()
+                local f   = windows[idx]
+                if f and f.editBox and editBox ~= f.editBox then
+                    editBox = f.editBox
+                end
+            end
+
+            stats.activateChat = stats.activateChat + 1
+            stats.activateChatLast = editBox
+                and (editBox:GetName() or "<unnamed>")
+                or "<nil>"
+
+            local result = original(editBox)
+
+            -- Re-anchor defensively: even after substitution, modern
+            -- retail's ActivateChat may stomp our anchors with its
+            -- own positioning logic. Re-assert below the chatFrame.
+            local chatFrame = editBox and editBox.chatFrame
+            if chatFrame and chatFrame ~= _G.UIParent and chatFrame.GetName then
+                editBox:ClearAllPoints()
+                editBox:SetPoint("TOPLEFT",  chatFrame, "BOTTOMLEFT",   -7, 3)
+                editBox:SetPoint("TOPRIGHT", chatFrame, "BOTTOMRIGHT",  25, 3)
+            end
+
+            return result
+        end
+    end
+end
+
 ---------------------------------------------------------------------------
 -- Pop out / pop in
 ---------------------------------------------------------------------------
 --
--- A "popped" tab detaches from the main chat dock and floats as its
--- own movable + resizable window, with a small title bar (drag handle
--- + close button) above the chat frame. Multiple tabs can be popped
--- at once. State and geometry persist via the tab's profile entry
--- (ws.popped and ws.popPos), so a relogged-out user comes back to
--- the same layout.
+-- Popping a tab out of the dock migrates it into a brand-new dock
+-- instance with a fresh dockID ("pop:<n>"). The chat frame re-anchors
+-- to the new instance's container; a tab button gets created on the
+-- new instance's strip; the old strip's tab button hides. Multi-tab
+-- popped containers are first-class - the new container's "+" button
+-- adds tabs to ITSELF, not back to the main dock.
 --
--- The popped tab is hidden from the dock's tab strip (Tabs.lua's
--- UpdateVisibility check); the close button is the user's path back
--- into the dock. Right-clicking the title bar with shift held opens
--- BazCore's chat-tab context menu (same one the docked tab strip
--- uses), so menu actions (Channels..., Clear messages, etc.) stay
--- reachable while popped.
+-- Popping back in migrates the tab to the main dock instance and
+-- destroys the popped container if it has no remaining tabs.
+--
+-- Container geometry persists in profile.docks[id]; tab membership
+-- persists via windows[idx].dockID. The pre-multi-dock popped/popPos
+-- fields are migrated into this shape on first load (see
+-- MigrateProfileForMultiDock).
 ---------------------------------------------------------------------------
 
-local function GetProfile()
-    return (addon.db and addon.db.profile)
-        or (addon.core and addon.core.db and addon.core.db.profile)
+-- Allocate a fresh popped dockID. Defaults to "pop:<idx>"; if that
+-- id is already in use (e.g. user popped, re-popped, popped again)
+-- a numeric suffix gets appended until a free id is found.
+local function AllocPoppedDockID(idx)
+    local p   = GetProfile()
+    local pd  = p and p.docks or {}
+    local id  = "pop:" .. tostring(idx)
+    local seq = 1
+    while pd[id] or Window.docks[id] do
+        seq = seq + 1
+        id = "pop:" .. tostring(idx) .. "_" .. seq
+    end
+    return id
 end
 
-local function GetWindowSettings(idx)
+-- Move a tab to a different dock instance. Hides the tab on its old
+-- strip, ensures the target strip exists and has a tab button for
+-- the window, re-anchors the chat frame, updates profile.windows[idx]
+-- .dockID, and selects the migrated tab on the target strip.
+function Window:MoveTabToDock(idx, targetDockID)
+    if not idx then return end
+    targetDockID = targetDockID or "dock"
+
     local p = GetProfile()
-    if not p then return nil end
-    p.windows = p.windows or {}
-    p.windows[idx] = p.windows[idx] or {}
-    return p.windows[idx]
-end
+    local ws = p and p.windows and p.windows[idx]
+    if not ws then return end
+    local oldDockID = ws.dockID or "dock"
+    if oldDockID == targetDockID then return end
 
--- Register a popped chat frame for BazCore edit mode the first time
--- it pops out, so dragging + resizing work in edit mode the same way
--- every other Baz floating frame does. Position is managed by us
--- (positionKey = false) so it lands in ws.popPos alongside the rest
--- of the per-tab geometry.
-local function EnsureEditModeRegistration(self, idx)
-    if self._bazPopEditModeRegistered then return end
-    self._bazPopEditModeRegistered = true
-
-    if not BazCore.RegisterEditModeFrame then return end
-
-    -- Pull the chrome / appearance settings out of BazChat's shared
-    -- SettingsSpec so the popped window's edit-mode popup matches the
-    -- main settings panel (Text opacity, Background opacity, Scale,
-    -- visibility modes, fade timing, line spacing, etc.). The spec
-    -- is the same source of truth the Options page reads from.
-    local settings
-    if BazCore.BuildEditModeArrayFromSpec then
-        settings = BazCore:BuildEditModeArrayFromSpec("BazChat")
+    -- Hide on the old strip (and pick a successor selection if this
+    -- was the active tab there). The button stays in the strip's tabs
+    -- table - TabSystem doesn't expose a true "remove" - but it's
+    -- hidden and orphaned for the rest of the session. The next
+    -- /reload rebuilds strips from scratch via CreateAll.
+    local oldTab, oldStrip, oldTabID
+    if addon.Tabs then
+        oldTab, oldStrip, oldTabID = addon.Tabs:GetTabFor(idx)
     end
-
-    BazCore:RegisterEditModeFrame(self, {
-        label             = "BazChat: Tab " .. idx,
-        addonName         = "BazChat",
-        positionKey       = false,
-        onPositionChanged = function() Window:SavePopGeometry(idx) end,
-        settings          = settings,
-        actions = {
-            { label = "Pop in (re-dock)",
-              onClick = function() Window:PopIn(idx) end },
-            { label = "Channels...",
-              onClick = function()
-                  if addon.Channels and addon.Channels.ShowPopup
-                     and addon.Tabs and addon.Tabs.system
-                     and addon.Tabs.system.tabs[idx] then
-                      addon.Channels:ShowPopup(addon.Tabs.system.tabs[idx], idx)
-                  end
-              end },
-            { label = "Clear messages",
-              onClick = function()
-                  if self.Clear then self:Clear() end
-              end },
-        },
-    })
-end
-
--- Standalone mini tab strip anchored above the popped window. Uses
--- the same TabSystemTemplate / TabSystemTopButtonTemplate pair the
--- dock strip uses, so the visual styling matches exactly: same shape,
--- same selected/inactive states, same atlas textures. We just create
--- a one-tab system per popped window. The mini-strip is also where
--- a future multi-tab-per-popped-window feature would attach more
--- tabs - the architecture is already container-friendly.
-local function EnsurePopTab(self, idx, label)
-    if self._bazPopTabSystem then
-        return self._bazPopTabSystem._mainTab
-    end
-
-    -- Wrap the entire tab-system construction in a single pcall: any
-    -- error inside here used to abort PopOut entirely, leaving the
-    -- window stuck docked while ws.popped was set to true. The whole
-    -- tab indicator is a polish nicety - if it can't be built, the
-    -- pop-out itself should still proceed without it.
-    local ok, ts, tab = pcall(function()
-        local sys = CreateFrame("Frame", nil, self, "BazChatTabSystemTemplate")
-        if not sys then return nil end
-        sys:SetPoint("BOTTOMLEFT", self, "TOPLEFT", 6, 9)
-        sys:SetScale(0.8)
-        -- Tab-selected callback: when the user clicks the popped
-        -- window's tab, mark this container as active so its strip
-        -- visually selects + the dock's strip deselects. Returns
-        -- nothing so the visual selection step still runs.
-        sys:SetTabSelectedCallback(function(_, isUserAction)
-            if isUserAction and Window.SetActiveContainer then
-                Window:SetActiveContainer(idx)
-                -- Activate the popped window's editbox so input
-                -- routes here on the next "/" or Enter.
-                local f = windows[idx]
-                if f and f.editBox and ChatEdit_ActivateChat then
-                    ChatEdit_ActivateChat(f.editBox)
+    if oldTab then
+        oldTab:Hide()
+        oldTab._windowIdx = nil   -- sever the back-reference
+        if oldStrip and oldStrip.MarkDirty then oldStrip:MarkDirty() end
+        if oldStrip and oldStrip.selectedTabID == oldTabID then
+            for tID, t in ipairs(oldStrip.tabs or {}) do
+                if t:IsShown() and tID ~= oldTabID then
+                    oldStrip:SetTab(tID, false)
+                    break
                 end
             end
-        end)
-        -- AddTab sets the label up front; the TabSystem template
-        -- does not respect Button:SetText() after creation.
-        local tabID = sys:AddTab(label or "Chat")
-        sys:SetTab(tabID)
-        local t = sys.tabs and sys.tabs[tabID]
-        return sys, t
-    end)
-
-    if not ok or not ts then
-        if not ok and addon.core then
-            addon.core:Print("|cffff4444BazChat: pop-tab build failed - " ..
-                             tostring(ts) .. "|r")
         end
-        return nil
     end
 
-    if tab then
-        tab:HookScript("OnMouseUp", function(_, mouseBtn)
-            if mouseBtn == "RightButton" and IsShiftKeyDown() and BazCore.OpenContextMenu then
-                BazCore:OpenContextMenu("chat-tab", tab, { tab = tab, index = idx })
-            end
-        end)
+    -- Update profile and re-anchor the frame to the target container.
+    ws.dockID = targetDockID
+    local newInst = Window:CreateDockInstance(targetDockID)
+    local f = windows[idx]
+    if f then
+        f._dockID = targetDockID
+        f:ClearAllPoints()
+        f:SetAllPoints(newInst.frame)
     end
 
-    -- Floating "+" button next to the mini-strip. Same behaviour as
-    -- the dock's "+": creates a new tab via Tabs:CreateNewTab. The
-    -- new tab joins the dock - the popped window's strip is single-
-    -- tab. (Multi-tab popped windows would need a container
-    -- abstraction; not in scope here.)
-    local addBtn = CreateFrame("Button", nil, ts)
-    addBtn:SetSize(32, 32)
-    addBtn:SetPoint("LEFT", ts, "RIGHT", 8, 0)
+    -- Add (or reveal) a tab button on the target strip. Tabs:AddFor
+    -- is idempotent: if a button already exists for this window on
+    -- the target strip (eg the user is yo-yoing pop in / pop out),
+    -- it just re-shows it instead of creating a duplicate.
+    if addon.Tabs and addon.Tabs.AddFor then
+        addon.Tabs:AddFor(f, idx, ws.label or ("Tab " .. idx))
+    end
 
-    local plus = addBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
-    local fontFile, _, fontFlags = plus:GetFont()
-    plus:SetFont(fontFile, 32, fontFlags or "")
-    plus:SetShadowOffset(2, -2)
-    plus:SetShadowColor(0, 0, 0, 1)
-    plus:SetPoint("CENTER", addBtn, "CENTER", 0, -1)
-    plus:SetText("+")
-    plus:SetTextColor(1, 0.82, 0)
-    addBtn.Text = plus
-
-    addBtn:SetScript("OnEnter", function(self) self.Text:SetTextColor(1, 1, 0.6) end)
-    addBtn:SetScript("OnLeave", function(self) self.Text:SetTextColor(1, 0.82, 0) end)
-    addBtn:SetScript("OnMouseDown", function(self)
-        self.Text:ClearAllPoints()
-        self.Text:SetPoint("CENTER", self, "CENTER", 1, -3)
-        self.Text:SetTextColor(0.75, 0.62, 0.18)
-    end)
-    addBtn:SetScript("OnMouseUp", function(self)
-        self.Text:ClearAllPoints()
-        self.Text:SetPoint("CENTER", self, "CENTER", 0, -1)
-        if self:IsMouseOver() then
-            self.Text:SetTextColor(1, 1, 0.6)
-        else
-            self.Text:SetTextColor(1, 0.82, 0)
-        end
-    end)
-    addBtn:SetScript("OnClick", function()
-        if addon.Tabs and addon.Tabs.CreateNewTab then
-            local newIdx, err = addon.Tabs:CreateNewTab("New Tab")
-            if not newIdx and err and addon.core then
-                addon.core:Print("|cffff8800" .. err .. "|r")
-            end
-        end
-    end)
-
-    ts._mainTab = tab
-    self._bazPopTabSystem = ts
-    return tab
+    -- Activate the migrated tab on the target strip so the chat
+    -- frame is the visible one in its new container.
+    local newStrip, newTabID
+    if addon.Tabs then
+        local _
+        _, newStrip, newTabID = addon.Tabs:GetTabFor(idx)
+    end
+    if newStrip and newTabID and newStrip.SetTab then
+        newStrip:SetTab(newTabID, false)
+    end
 end
 
-function Window:SavePopGeometry(idx)
-    local f = windows[idx]
-    if not f then return end
-    local ws = GetWindowSettings(idx)
-    if not ws then return end
-    local point, _, relativePoint, x, y = f:GetPoint()
-    ws.popPos = {
-        point         = point         or "CENTER",
-        relativePoint = relativePoint or "CENTER",
-        x             = x or 0,
-        y             = y or 0,
-        w             = f:GetWidth(),
-        h             = f:GetHeight(),
+-- Returns true if this tab has at least one other tab in the same
+-- container. Used to decide whether "Pop out" is meaningful (splitting
+-- the tab into its own new container) vs a no-op (it's already alone
+-- in a popped container, which IS its own window).
+function Window:HasSiblingsInContainer(idx)
+    local ws = WindowProfile(idx)
+    if not ws then return false end
+    local myID = ws.dockID or "dock"
+    local p = GetProfile()
+    if not (p and p.windows) then return false end
+    for i, w in pairs(p.windows) do
+        if i ~= idx and (w.dockID or "dock") == myID then
+            return true
+        end
+    end
+    return false
+end
+
+-- Enumerate all live dock containers as a sorted array. Each entry:
+--   { id, label, tabIndices }
+-- The main dock is always first; popped containers follow in dockID
+-- order. Labels are user-facing - "Main Chat Window" for the dock,
+-- "Window N (firstTab)" for popped instances, with a sibling-count
+-- suffix when a popped container holds multiple tabs.
+function Window:ListContainers()
+    local p = GetProfile()
+    local out = {}
+
+    -- Bucket window indices by container.
+    local byDock = {}
+    if p and p.windows then
+        for idx, ws in pairs(p.windows) do
+            local id = ws.dockID or "dock"
+            byDock[id] = byDock[id] or {}
+            table.insert(byDock[id], idx)
+        end
+    end
+    for _, list in pairs(byDock) do
+        table.sort(list)
+    end
+
+    -- Main dock first.
+    out[#out + 1] = {
+        id          = "dock",
+        label       = "Main Chat Window",
+        tabIndices  = byDock["dock"] or {},
     }
+
+    -- Popped containers, sorted by id for stable order.
+    local popIDs = {}
+    for id in pairs(byDock) do
+        if id ~= "dock" then popIDs[#popIDs + 1] = id end
+    end
+    table.sort(popIDs)
+
+    for i, id in ipairs(popIDs) do
+        local idxs = byDock[id]
+        local firstLabel = "Tab"
+        if idxs[1] and p and p.windows and p.windows[idxs[1]] then
+            firstLabel = p.windows[idxs[1]].label or firstLabel
+        end
+        local label = string.format("Window %d (%s)", i + 1, firstLabel)
+        if #idxs > 1 then
+            label = label .. string.format(" + %d more", #idxs - 1)
+        end
+        out[#out + 1] = {
+            id         = id,
+            label      = label,
+            tabIndices = idxs,
+        }
+    end
+
+    return out
+end
+
+-- Move a tab to ANY container (main dock or a popped one). Wraps
+-- MoveTabToDock with the lifecycle bits PopIn does: destroy the old
+-- popped container if it ends up empty, refresh visibility, update
+-- the active container so focus follows the moved tab.
+function Window:MoveTab(idx, targetDockID)
+    if idx == 1 then return end   -- General is the dock's anchor
+    targetDockID = targetDockID or "dock"
+    local ws = WindowProfile(idx)
+    if not ws then return end
+    local oldID = ws.dockID or "dock"
+    if oldID == targetDockID then return end
+
+    -- Make sure the destination container exists. For popped targets
+    -- the instance was likely already alive (we got the id from
+    -- ListContainers); for the main dock CreateDockInstance returns
+    -- the cached singleton.
+    Window:CreateDockInstance(targetDockID)
+
+    Window:MoveTabToDock(idx, targetDockID)
+
+    -- Destroy the source popped container if no tabs left in it.
+    if oldID ~= "dock" then
+        local stillHas = false
+        local p = GetProfile()
+        if p and p.windows then
+            for _, w in pairs(p.windows) do
+                if (w.dockID or "dock") == oldID then
+                    stillHas = true
+                    break
+                end
+            end
+        end
+        if not stillHas then
+            Window:DestroyDockInstance(oldID, true)
+        end
+    end
+
+    if addon.Tabs and addon.Tabs.UpdateVisibility then
+        addon.Tabs:UpdateVisibility()
+    end
+
+    Window:SetActiveContainer(targetDockID)
 end
 
 function Window:PopOut(idx)
-    if idx == 1 then return end  -- General is the dock's anchor
+    if idx == 1 then return end   -- General is the dock's anchor
     local f = windows[idx]
     if not f then return end
-    local ws = GetWindowSettings(idx)
-    if not ws or ws.popped then return end
+    local ws = WindowProfile(idx)
+    if not ws then return end
 
-    -- Active-tab swap FIRST, before any visual state changes. SetTab
-    -- internally hides the previously-active window and shows the new
-    -- one - if we ran this AFTER positioning the popped window, the
-    -- swap would hide our just-shown window and the user would see
-    -- nothing happen.
-    local ts = addon.Tabs and addon.Tabs.system
-    if ts and ts.selectedTabID == idx and ts.SetTab then
-        local p = GetProfile()
-        for i = 1, #ts.tabs do
-            if i ~= idx and not (p and p.windows and p.windows[i] and p.windows[i].popped) then
-                ts:SetTab(i, false)
-                break
-            end
-        end
+    -- A tab can be popped out if it's currently in the dock, OR if
+    -- it's in a popped container that holds other tabs (split it into
+    -- its own new container). A tab alone in a popped container is
+    -- already its own popped window - nothing to do.
+    if (ws.dockID or "dock") ~= "dock"
+       and not Window:HasSiblingsInContainer(idx) then
+        return
     end
 
-    ws.popped = true
-    f._bcPopped = true
-
-    EnsureEditModeRegistration(f, idx)
-    if BazCore.UpdateEditModeLabel then
-        BazCore:UpdateEditModeLabel(f, "BazChat: " .. (ws.label or ("Tab " .. idx)))
+    -- Pre-create the popped instance with a fresh id. Migration of
+    -- the tab afterwards re-anchors the chat frame to it.
+    local newID = AllocPoppedDockID(idx)
+    Window:CreateDockInstance(newID, {
+        label = "BazChat: " .. (ws.label or ("Tab " .. idx)),
+    })
+    if BazCore.UpdateEditModeLabel and Window.docks[newID] then
+        BazCore:UpdateEditModeLabel(Window.docks[newID].frame,
+            "BazChat: " .. (ws.label or ("Tab " .. idx)))
     end
 
-    -- Standalone tab attached above the popped window. The dock strip
-    -- hides its version of this tab (UpdateVisibility) so each tab
-    -- shows exactly once - either docked or as the popped indicator.
-    EnsurePopTab(f, idx, ws.label or ("Tab " .. idx))
-    if f._bazPopTabSystem then f._bazPopTabSystem:Show() end
+    -- Migrate the tab + chat frame into the new container.
+    Window:MoveTabToDock(idx, newID)
 
-    f:ClearAllPoints()
-
-    -- Anchor at TOPLEFT (not CENTER): the chat frame's built-in
-    -- ResizeButton calls StartSizing("BOTTOMRIGHT") which needs a
-    -- fixed top-left corner to drag the bottom-right against. With a
-    -- CENTER anchor the frame grows from the middle and the resize
-    -- handle can't anchor consistently.
-    local pos = ws.popPos
-    if pos and pos.point then
-        f:SetPoint(pos.point, UIParent, pos.relativePoint or "TOPLEFT",
-                   pos.x or 0, pos.y or 0)
-        f:SetSize(pos.w or 420, pos.h or 240)
-    else
-        -- Default: roughly screen-center but anchored top-left so the
-        -- resize handle works.
-        f:SetPoint("TOPLEFT", UIParent, "CENTER", -210, 120)
-        f:SetSize(420, 240)
-    end
+    -- Popped windows are always visible - no sibling hides them.
     f:Show()
-
-    -- Re-target the chat frame's ResizeButton to resize the chat
-    -- itself instead of the dock. CreateAll's setup wires this button
-    -- to call Window.dock:StartSizing because docked chats are
-    -- SetAllPoints(dock) and need the dock to resize. A popped chat
-    -- has its own anchor and should resize on its own.
-    if f.ResizeButton then
-        f.ResizeButton:SetScript("OnMouseDown", function(self)
-            self:SetButtonState("PUSHED", true)
-            local hl = self:GetHighlightTexture()
-            if hl then hl:Hide() end
-            f:StartSizing("BOTTOMRIGHT")
-        end)
-        f.ResizeButton:SetScript("OnMouseUp", function(self)
-            self:SetButtonState("NORMAL", false)
-            local hl = self:GetHighlightTexture()
-            if hl then hl:Show() end
-            f:StopMovingOrSizing()
-            Window:SavePopGeometry(idx)
-        end)
-    end
-
-    -- The NineSlice chrome (Replica/Chrome.lua) is a UIParent-sibling
-    -- of f, anchored to f's corners. It tracks f's position via the
-    -- TOPLEFT/BOTTOMRIGHT anchors automatically, but its visibility is
-    -- driven by AutoHide / OnShow hooks that may have left it hidden
-    -- or alpha-zero from when this tab was non-active in the dock.
-    -- Force it visible so the popped window has its panel backdrop.
     if f._bcChromeFrame then f._bcChromeFrame:Show() end
 
-    -- Apply the chrome settings (text/bg alpha, scale, fade timing,
-    -- max lines, etc.) so the popped window inherits the same
-    -- appearance as the main dock. ApplySettings reads from
-    -- windows[1] (the canonical chrome block) so the popped window
-    -- automatically tracks any later changes the user makes via the
-    -- Options page or the dock's edit-mode popup.
     Window:ApplySettings(idx)
 
     if addon.Tabs and addon.Tabs.UpdateVisibility then
@@ -1573,105 +1962,123 @@ function Window:PopOut(idx)
 
     -- The freshly-popped window becomes the active container so the
     -- user's next "/" or Enter routes here without a manual click.
-    Window:SetActiveContainer(idx)
+    Window:SetActiveContainer(newID)
 end
 
 function Window:PopIn(idx)
     local f = windows[idx]
     if not f then return end
-    local ws = GetWindowSettings(idx)
-    if not ws or not ws.popped then return end
+    local ws = WindowProfile(idx)
+    if not ws then return end
+    local oldDockID = ws.dockID or "dock"
+    if oldDockID == "dock" then return end
 
-    Window:SavePopGeometry(idx)
-    ws.popped = false
-    f._bcPopped = false
+    Window:MoveTabToDock(idx, "dock")
 
-    -- BazCore edit mode owns drag/resize state for popped frames;
-    -- unregister so it doesn't keep tracking this one once docked.
-    if BazCore.UnregisterEditModeFrame then
-        BazCore:UnregisterEditModeFrame(f)
-        f._bazPopEditModeRegistered = false
+    -- If the popped container has no remaining tabs, destroy it and
+    -- wipe its profile entry. Multi-tab popped containers stick
+    -- around until the LAST tab pops in.
+    local stillHas = false
+    local p = GetProfile()
+    if p and p.windows then
+        for i, w in pairs(p.windows) do
+            if (w.dockID or "dock") == oldDockID then
+                stillHas = true
+                break
+            end
+        end
     end
-
-    -- Hide the standalone tab strip; the dock's strip will show the
-    -- tab again as part of UpdateVisibility below.
-    if f._bazPopTabSystem then f._bazPopTabSystem:Hide() end
-
-    -- Restore the ResizeButton to its docked behaviour: drag resizes
-    -- the dock, not the chat frame, since the chat is SetAllPoints
-    -- to dock once re-docked.
-    if f.ResizeButton then
-        f.ResizeButton:SetScript("OnMouseDown", function(self)
-            self:SetButtonState("PUSHED", true)
-            local hl = self:GetHighlightTexture()
-            if hl then hl:Hide() end
-            if Window.dock then Window.dock:StartSizing("BOTTOMRIGHT") end
-        end)
-        f.ResizeButton:SetScript("OnMouseUp", function(self)
-            self:SetButtonState("NORMAL", false)
-            local hl = self:GetHighlightTexture()
-            if hl then hl:Show() end
-            if Window.dock then Window.dock:StopMovingOrSizing() end
-        end)
-    end
-
-    local dock = Window:CreateDock()
-    f:ClearAllPoints()
-    f:SetParent(UIParent)
-    f:SetAllPoints(dock)
-
-    -- Show only if this is now the active tab; otherwise hide so it
-    -- stacks correctly under the active one in the dock.
-    local ts = addon.Tabs and addon.Tabs.system
-    if ts and ts.selectedTabID == idx then
-        f:Show()
-    else
-        f:Hide()
+    if not stillHas then
+        Window:DestroyDockInstance(oldDockID, true)
     end
 
     if addon.Tabs and addon.Tabs.UpdateVisibility then
         addon.Tabs:UpdateVisibility()
     end
 
-    -- If this window was the active container, focus reverts to the
-    -- dock now that the floater is gone.
-    if Window.activeContainer == idx then
-        Window:SetActiveContainer(nil)
+    -- Active container reverts to the main dock if the popped one
+    -- was the active one (or got destroyed above).
+    if Window.activeContainer == oldDockID then
+        Window:SetActiveContainer("dock")
     end
 end
 
+-- IsPopped returns true if the window's tab is currently in any
+-- container other than the main dock. Pre-multi-dock callers used
+-- this to gate UI affordances ("show Pop in vs Pop out") - the
+-- semantics still match.
 function Window:IsPopped(idx)
-    local p = GetProfile()
-    return p and p.windows and p.windows[idx] and p.windows[idx].popped == true
+    local ws = WindowProfile(idx)
+    return ws and (ws.dockID or "dock") ~= "dock" or false
 end
 
--- Re-pop any tabs that were popped at logout. Called after
--- Window:CreateAll has finished and tabs are wired up. PopOut early-
--- returns when ws.popped is already true, so we briefly flip the flag
--- back to false before calling it - PopOut then re-runs the full
--- positioning + chrome + edit-mode-registration flow as if the user
--- had just clicked Pop out.
-function Window:RestorePoppedStates()
+-- DockInstance(id): pop in every tab in a popped container at once.
+-- Used by the per-instance edit-mode action "Pop all tabs back to
+-- dock" (multi-tab popped containers).
+function Window:DockInstance(id)
+    if id == "dock" then return end
     local p = GetProfile()
-    if not p or not p.windows then return end
+    if not (p and p.windows) then return end
+    local toMove = {}
     for idx, ws in pairs(p.windows) do
-        if ws and ws.popped then
-            ws.popped = false
-            Window:PopOut(idx)
-        end
+        if (ws.dockID or "dock") == id then toMove[#toMove + 1] = idx end
     end
+    table.sort(toMove)
+    for _, idx in ipairs(toMove) do Window:PopIn(idx) end
 end
 
--- Force-redock every popped tab. Recovery path for the case where a
--- popped window is invisible / off-screen and the user can't reach it
--- via the strip (popped tabs are hidden from the strip). Exposed as
--- the /bc dockall slash command and via the chat-tab context menu.
+-- Force-redock every popped tab regardless of which container.
+-- Recovery path: a popped window may end up off-screen and the only
+-- way back is via slash command or the chat-tab context menu.
 function Window:DockAllPopped()
     local p = GetProfile()
-    if not p or not p.windows then return end
+    if not (p and p.windows) then return end
+    local toMove = {}
     for idx, ws in pairs(p.windows) do
-        if ws and ws.popped then
-            Window:PopIn(idx)
+        if (ws.dockID or "dock") ~= "dock" then
+            toMove[#toMove + 1] = idx
+        end
+    end
+    table.sort(toMove)
+    for _, idx in ipairs(toMove) do Window:PopIn(idx) end
+end
+
+-- Restore-on-/reload entry point. Pre-multi-dock this used to flip
+-- ws.popped + re-PopOut each window. Today the dock instance for
+-- each popped tab has already been created automatically (CreateAll
+-- iterates windows, each AddFor calls CreateDockInstance(dockID)
+-- which is idempotent). All RestorePoppedStates needs to do is make
+-- sure popped windows are SHOWN (Window:Create currently hides
+-- non-index-1 windows by default) and apply their settings + select
+-- the right tab on each popped strip.
+function Window:RestorePoppedStates()
+    local p = GetProfile()
+    if not (p and p.windows) then return end
+    for idx, ws in pairs(p.windows) do
+        local dockID = ws.dockID or "dock"
+        if dockID ~= "dock" and windows[idx] then
+            local f = windows[idx]
+            local inst = Window.docks[dockID]
+            if inst and inst.frame then
+                f:ClearAllPoints()
+                f:SetAllPoints(inst.frame)
+            end
+            f._dockID = dockID
+            -- Default-show the popped window. The strip's first
+            -- SetTab call (made in AddFor) selects the first tab
+            -- added to that strip; for multi-tab popped containers
+            -- only one tab is shown at a time so siblings get
+            -- hidden by the SetTab callback.
+            local s = inst and inst.tabSystem
+            if s and s.selectedTabID then
+                local activeIdx = (addon.Tabs and addon.Tabs:WindowIdxOf(s, s.selectedTabID))
+                                  or s.selectedTabID
+                f:SetShown(idx == activeIdx)
+            else
+                f:Show()
+            end
+            if f._bcChromeFrame then f._bcChromeFrame:Show() end
+            Window:ApplySettings(idx)
         end
     end
 end

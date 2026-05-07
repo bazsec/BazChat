@@ -36,10 +36,8 @@ end
 ---------------------------------------------------------------------------
 
 local function RefreshTabLabel(idx, newLabel)
-    if not (addon.Tabs and addon.Tabs.system and addon.Tabs.system.tabs) then
-        return
-    end
-    local tab = addon.Tabs.system.tabs[idx]
+    if not (addon.Tabs and addon.Tabs.GetTabFor) then return end
+    local tab = addon.Tabs:GetTabFor(idx)
     if tab and tab.Init then
         tab:Init(idx, newLabel)
     end
@@ -118,9 +116,10 @@ local function BuildTabDetail(item)
           func = function()
               if not addon.Channels then return end
               -- Anchor the popup to the tab button if available, else
-              -- to UIParent center-ish via a fake anchor frame.
-              local tab = addon.Tabs and addon.Tabs.system
-                  and addon.Tabs.system.tabs and addon.Tabs.system.tabs[idx]
+              -- to UIParent center-ish. Tab can live on any dock
+              -- instance's strip - GetTabFor scans them all.
+              local tab = addon.Tabs and addon.Tabs.GetTabFor
+                  and addon.Tabs:GetTabFor(idx) or nil
               if tab then
                   addon.Channels:ShowPopup(tab, idx)
               else

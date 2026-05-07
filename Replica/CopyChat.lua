@@ -36,8 +36,8 @@ local function FormatLines(lines, stripColors)
 end
 
 local function ActiveFrame()
-    local ts  = addon.Tabs and addon.Tabs.system
-    local idx = ts and ts.selectedTabID or 1
+    local idx = (addon.Window and addon.Window.GetActiveWindowIdx
+                 and addon.Window:GetActiveWindowIdx()) or 1
     return addon.Window and addon.Window:Get(idx), idx
 end
 

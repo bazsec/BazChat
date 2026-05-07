@@ -1,5 +1,30 @@
 # BazChat Changelog
 
+## 034 — Multi-tab popped windows + routing fixes
+
+Popped chat windows are now first-class mini-docks. The "+" button on
+a popped window adds tabs to that popped window (used to add to the
+main dock). Each popped window has its own resize, edit-mode popup,
+position, and tab strip — same code path as the main dock.
+
+- Move tabs anywhere via shift+right-click → "Move to". Submenu lists
+  every existing chat window plus a "New window (pop out)" option.
+- Splitting a tab from a multi-tab popped window into its own new
+  window now works (previously only "Pop in" was offered).
+- Rename a tab from shift+right-click → "Rename...".
+- Press Enter or "/" while a popped tab is focused: editbox now
+  appears under the popped window. Was landing under the main chat
+  because Blizzard's modern Enter binding bypasses the chat-frame
+  pointers we were setting.
+- Pop out spawns at the screen center instead of overlapping the
+  main chat window.
+- Deleting a tab no longer requires a /reload to actually clear —
+  fixed a stale visibility re-show that brought back the deleted tab.
+- Creating a tab with the "+" button now appears immediately instead
+  of sometimes needing a reload to lay out.
+
+Saved settings auto-migrate on first load. No action needed.
+
 ## 033 — Pop-out polish + focus tracking
 
 Pop-out got a substantial round of fixes. Single-tab popped windows

@@ -43,6 +43,46 @@ local function GetBazChatSection(ctx)
 
     local items = {
         {
+            label = "Rename...",
+            onClick = function()
+                local p = (addon.db and addon.db.profile)
+                    or (addon.core and addon.core.db and addon.core.db.profile)
+                local ws = p and p.windows and p.windows[idx]
+                if not ws then return end
+                local current = ws.label or ("Tab " .. idx)
+                BazCore:OpenPopup({
+                    title  = "Rename tab",
+                    width  = 360,
+                    fields = {
+                        { type    = "input",
+                          key     = "name",
+                          label   = "Name",
+                          default = current },
+                    },
+                    buttons = {
+                        { label = "Cancel", style = "default" },
+                        { label = "Save",   style = "primary",
+                          onClick = function(values)
+                              local newLabel = values and values.name
+                              if not newLabel or newLabel == "" then return end
+                              ws.label = newLabel
+                              -- Refresh the live tab button on whichever
+                              -- strip is hosting it.
+                              if addon.Tabs and addon.Tabs.GetTabFor then
+                                  local t = addon.Tabs:GetTabFor(idx)
+                                  if t and t.Init then t:Init(idx, newLabel) end
+                              end
+                              -- Refresh the BazCore Tabs options page
+                              -- if it's open.
+                              if BazCore.RefreshOptions then
+                                  BazCore:RefreshOptions("BazChat-Tabs")
+                              end
+                          end },
+                    },
+                })
+            end,
+        },
+        {
             label = "Channels...",
             onClick = function()
                 if addon.Channels and addon.Channels.ShowPopup and tab then
@@ -59,25 +99,54 @@ local function GetBazChatSection(ctx)
         },
     }
 
-    -- Pop out / Pop in toggle. The label flips based on the tab's
-    -- current popped state. Tab 1 (General) is the dock's anchor and
-    -- can't be popped, so the entry's only ever offered for idx > 1
-    -- (Pop in is offered if the tab somehow ends up popped anyway, so
-    -- the user always has a path back).
-    if addon.Window and addon.Window.IsPopped then
-        if addon.Window:IsPopped(idx) then
-            items[#items + 1] = {
-                label = "Pop in (re-dock)",
+    -- "Move to" submenu: lists every existing container plus a
+    -- "New window" entry that creates a fresh popped container. The
+    -- tab's current container is hidden from the list (no-op move).
+    -- Tab 1 (General) is the dock's anchor and can't be moved.
+    if idx > 1 and addon.Window and addon.Window.ListContainers then
+        local Wins         = addon.Window
+        local currentID    = Wins.IsPopped and (
+            (function()
+                local p = (addon.db and addon.db.profile)
+                    or (addon.core and addon.core.db and addon.core.db.profile)
+                local ws = p and p.windows and p.windows[idx]
+                return ws and ws.dockID or "dock"
+            end)()
+        ) or "dock"
+        local hasSiblings  = Wins.HasSiblingsInContainer
+            and Wins:HasSiblingsInContainer(idx)
+
+        local moveItems = {}
+        for _, c in ipairs(Wins:ListContainers()) do
+            if c.id ~= currentID then
+                local destID = c.id
+                moveItems[#moveItems + 1] = {
+                    label = c.label,
+                    onClick = function()
+                        if Wins.MoveTab then Wins:MoveTab(idx, destID) end
+                    end,
+                }
+            end
+        end
+        -- "New window" splits the tab into a fresh popped container.
+        -- For a tab alone in a popped container, this is a no-op
+        -- (PopOut early-returns without siblings) so we hide it then.
+        if currentID == "dock" or hasSiblings then
+            if #moveItems > 0 then
+                moveItems[#moveItems + 1] = { divider = true }
+            end
+            moveItems[#moveItems + 1] = {
+                label = "New window (pop out)",
                 onClick = function()
-                    if addon.Window.PopIn then addon.Window:PopIn(idx) end
+                    if Wins.PopOut then Wins:PopOut(idx) end
                 end,
             }
-        elseif idx > 1 then
+        end
+
+        if #moveItems > 0 then
             items[#items + 1] = {
-                label = "Pop out",
-                onClick = function()
-                    if addon.Window.PopOut then addon.Window:PopOut(idx) end
-                end,
+                label   = "Move to",
+                submenu = moveItems,
             }
         end
     end
@@ -241,44 +310,131 @@ local function ShouldShowTab(autoShow)
 end
 
 function Tabs:UpdateVisibility()
-    local ts = self.system
-    if not ts or not ts.tabs then return end
-
     local p = (addon.db and addon.db.profile)
         or (addon.core and addon.core.db and addon.core.db.profile)
+    local Wins = addon.Window
+    local docks = Wins and Wins.docks
+    if not docks then
+        -- Pre-multi-dock fallback: there's only the main strip. Keep
+        -- the legacy walk for safety during boot.
+        local ts = self.system
+        if not (ts and ts.tabs) then return end
+        for tID, tab in ipairs(ts.tabs) do
+            local idx    = self:WindowIdxOf(ts, tID) or tID
+            local ws     = p and p.windows and p.windows[idx]
+            local should = ShouldShowTab(ws and ws.autoShow)
+            if tab:IsShown() ~= should then tab:SetShown(should) end
+        end
+        if ts.MarkDirty then ts:MarkDirty() end
+        return
+    end
 
-    local layoutChanged   = false
-    local activeNeedsSwap = false
-
-    for idx, tab in ipairs(ts.tabs) do
-        local ws     = p and p.windows and p.windows[idx]
-        -- Popped tabs are hidden from the dock strip; the popped
-        -- window has its own standalone tab indicator above it
-        -- (Window.lua's _bazPopTab) so each tab shows exactly once.
-        local should = ShouldShowTab(ws and ws.autoShow) and not (ws and ws.popped)
-        if tab:IsShown() ~= should then
-            tab:SetShown(should)
-            layoutChanged = true
-            if not should and ts.selectedTabID == idx then
-                activeNeedsSwap = true
+    -- For each dock instance, walk its strip. A tab is shown if
+    -- its window's autoShow predicate is true AND its profile dockID
+    -- matches the strip's dockID (so a stale tab on the wrong strip
+    -- - shouldn't happen but defensive - hides itself). Deleted tabs
+    -- (no profile entry) and tabs with no _windowIdx back-reference
+    -- (severed by DeleteTab / MoveTab) are unconditionally hidden.
+    for stripDockID, inst in pairs(docks) do
+        local ts = inst.tabSystem
+        if ts and ts.tabs then
+            local layoutChanged, activeNeedsSwap = false, false
+            for tID, tab in ipairs(ts.tabs) do
+                local idx = self:WindowIdxOf(ts, tID)
+                local ws  = idx and p and p.windows and p.windows[idx]
+                local should
+                if not ws or not tab._windowIdx then
+                    -- Tab no longer has a profile entry (deleted) or
+                    -- has been severed by a migration - leave hidden.
+                    should = false
+                else
+                    local rightStrip = (ws.dockID or "dock") == stripDockID
+                    should = rightStrip and ShouldShowTab(ws.autoShow)
+                end
+                if tab:IsShown() ~= should then
+                    tab:SetShown(should)
+                    layoutChanged = true
+                    if not should and ts.selectedTabID == tID then
+                        activeNeedsSwap = true
+                    end
+                end
+            end
+            if layoutChanged and ts.MarkDirty then ts:MarkDirty() end
+            if activeNeedsSwap then
+                -- Pick any other visible tab on the same strip; falls
+                -- back to tabID 1 if everything's hidden (rare edge).
+                local fallback
+                for i = 1, #ts.tabs do
+                    if ts.tabs[i]:IsShown() then fallback = i; break end
+                end
+                ts:SetTab(fallback or 1, false)
             end
         end
     end
-
-    if layoutChanged and ts.MarkDirty then ts:MarkDirty() end
-    if activeNeedsSwap then ts:SetTab(1, false) end
 end
 
 ---------------------------------------------------------------------------
 -- TabSystem construction
 ---------------------------------------------------------------------------
+--
+-- Each dock instance (main "dock" or a popped "pop:N") gets its own
+-- tab strip + "+" button. Tabs:EnsureFor(dockInstance) lazily builds
+-- both and stashes them on the instance struct. Tabs:AddFor reads
+-- windows[idx].dockID to pick the right strip.
+--
+-- TabSystem assigns tabIDs sequentially per-strip starting at 1, so
+-- in a popped strip with two windows the first tab has ID 1 even if
+-- it represents window 5. We always store the authoritative window
+-- index on tab._windowIdx; helpers below resolve back through it.
+---------------------------------------------------------------------------
 
-local function BuildAddButton(ts)
+local function DockIDForWindow(idx)
+    local ws = WindowDB(idx)
+    return (ws and ws.dockID) or "dock"
+end
+
+-- tabID -> windowIdx for a given strip. Falls back to tabID when the
+-- back-reference is missing (early boot / migration edge).
+function Tabs:WindowIdxOf(strip, tabID)
+    if not (strip and strip.tabs and strip.tabs[tabID]) then return nil end
+    return strip.tabs[tabID]._windowIdx or tabID
+end
+
+-- Find a tab button by window index, scanning every dock instance's
+-- strip. Returns (tab, strip, tabID) or nil if no strip holds it.
+function Tabs:GetTabFor(windowIdx)
+    local Wins = addon.Window
+    if not (Wins and Wins.docks) then
+        -- Fallback: legacy single-strip path
+        local s = self.system
+        if s and s.tabs and s.tabs[windowIdx] then
+            return s.tabs[windowIdx], s, windowIdx
+        end
+        return nil
+    end
+    for _, inst in pairs(Wins.docks) do
+        local s = inst.tabSystem
+        if s and s.tabs then
+            for tID, tab in ipairs(s.tabs) do
+                if (tab._windowIdx or tID) == windowIdx then
+                    return tab, s, tID
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function BuildAddButton(ts, dockID)
     -- Floating "+" button to the right of the tab strip. Just a gold
     -- "+" glyph, no tab chrome (avoids the doubled-shadow problems
     -- that came from squeezing TabSystemTopButtonTemplate into a
-    -- narrow width). Stubbed OnClick for now.
-    local addBtn = CreateFrame("Button", "BazChatAddTabButton", ts)
+    -- narrow width). Per-strip; clicking adds a tab to THIS strip's
+    -- dock instance.
+    local safeID = (dockID or "dock"):gsub("[^%w_]", "_")
+    local btnName = (dockID == "dock") and "BazChatAddTabButton"
+                                       or  ("BazChatAddTabButton_" .. safeID)
+    local addBtn = CreateFrame("Button", btnName, ts)
     addBtn:SetSize(32, 32)
     addBtn:SetPoint("LEFT", ts, "RIGHT", 8, 0)
 
@@ -309,7 +465,7 @@ local function BuildAddButton(ts)
         end
     end)
     addBtn:SetScript("OnClick", function()
-        local newIdx, err = Tabs:CreateNewTab("New Tab")
+        local newIdx, err = Tabs:CreateNewTab("New Tab", dockID)
         if not newIdx then
             if addon.core and err then
                 addon.core:Print("|cffff8800" .. err .. "|r")
@@ -330,13 +486,103 @@ local function BuildAddButton(ts)
     return addBtn
 end
 
-function Tabs:Ensure(firstWindow)
-    if self.system then return self.system end
+-- Tab-selected callback factory. Closures over the strip's dockID so
+-- the show/hide loop only touches windows in the same container, and
+-- the active-container update reflects which strip the user clicked.
+local function MakeTabSelectedCallback(stripDockID)
+    return function(tabID, isUserAction)
+        local strip
+        local Wins = addon.Window
+        if Wins and Wins.docks then
+            local inst = Wins.docks[stripDockID]
+            strip = inst and inst.tabSystem
+        end
+        local windowIdx = Tabs:WindowIdxOf(strip, tabID) or tabID
 
-    -- Parent to UIParent (NOT firstWindow). When the user clicks a
-    -- tab we hide the previous window and show the new one - if the
-    -- TabSystem were a child of the hidden window it'd vanish too.
-    local ts = CreateFrame("Frame", "BazChatTabSystem", UIParent, "TabSystemTemplate")
+        -- If the clicked tab's profile says it lives in another dock
+        -- (rare - UpdateVisibility hides cross-dock tabs - but defensive
+        -- against state desync), migrate it to this dock first so the
+        -- show below targets the right window.
+        if isUserAction then
+            local cur = DockIDForWindow(windowIdx)
+            if cur ~= stripDockID and Wins and Wins.MoveTabToDock then
+                Wins:MoveTabToDock(windowIdx, stripDockID)
+            end
+        end
+
+        -- Mark this strip's container active. The dock uses the legacy
+        -- nil convention; popped containers identify by their dockID.
+        if isUserAction and Wins and Wins.SetActiveContainer then
+            if stripDockID == "dock" then
+                Wins:SetActiveContainer(nil)
+            else
+                Wins:SetActiveContainer(windowIdx)
+            end
+        end
+
+        -- Show the clicked window, hide siblings IN THE SAME container.
+        -- Other containers' windows are untouched: switching dock tabs
+        -- doesn't hide popped windows, switching popped tabs doesn't
+        -- hide dock windows.
+        for idx, win in pairs(WindowList()) do
+            if DockIDForWindow(idx) == stripDockID then
+                local active = idx == windowIdx
+                win:SetShown(active)
+            end
+            if win.editBox then win.editBox:Hide() end
+        end
+
+        -- Instant state-sync for the newly-active window's chrome and
+        -- scrollbar so they don't flash to their old alpha (possibly 0
+        -- in onhover/onscroll mode) before the per-window hover poller
+        -- catches up.
+        if addon.AutoHide and addon.AutoHide.SyncWindow then
+            local newF = WindowList()[windowIdx]
+            if newF then addon.AutoHide:SyncWindow(newF) end
+        end
+
+        local w     = WindowList()[windowIdx]
+        local wDB   = WindowDB(windowIdx)
+        local group = wDB and wDB.eventGroup or "GENERAL"
+        local readOnly = group == "LOG"
+        local inEditMode = Wins and Wins.dock
+                           and Wins.dock._inEditMode
+
+        if isUserAction and w and w.editBox and not readOnly then
+            -- Re-assert chat type on every tab switch. Defensive against
+            -- Blizzard's chat code occasionally rewriting chatType (eg
+            -- after /whisper). Trade tab also re-resolves the channel
+            -- ID in case the player just /joined or left a Trade channel.
+            Tabs:ApplyChatType(w.editBox, group)
+            ChatEdit_ActivateChat(w.editBox)
+        elseif inEditMode and w and w.editBox and not readOnly then
+            -- Edit Mode: keep editbox visible without stealing focus.
+            w.editBox:Show()
+        end
+        return false
+    end
+end
+
+-- Lazy-create a tab strip on the given dock instance. Each instance
+-- gets exactly one strip; the cached strip is stashed on the instance
+-- so future calls return it. The main dock's strip is also exposed as
+-- self.system for back-compat with the many call sites that read it.
+function Tabs:EnsureFor(dockInstance)
+    if not dockInstance then return nil end
+    if dockInstance.tabSystem then return dockInstance.tabSystem end
+
+    local id    = dockInstance.id
+    local frame = dockInstance.frame
+    if not frame then return nil end
+
+    -- Parent the strip to UIParent (NOT the chat window). When the
+    -- user clicks a tab we hide the previous window and show the new
+    -- one - if the TabSystem were a child of the hidden window it'd
+    -- vanish too.
+    local safeID = (id or "dock"):gsub("[^%w_]", "_")
+    local stripName = (id == "dock") and "BazChatTabSystem"
+                                     or  ("BazChatTabSystem_" .. safeID)
+    local ts = CreateFrame("Frame", stripName, UIParent, "TabSystemTemplate")
     if not ts then
         if addon.core then
             addon.core:Print("|cffff4444TabSystemTemplate not found - skipping tabs|r")
@@ -355,88 +601,36 @@ function Tabs:Ensure(firstWindow)
 
     -- Anchor only - no SetSize. TabSystemTemplate inherits
     -- HorizontalLayoutFrame which sizes from child tabs after MarkDirty
-    -- (which AddTab calls). Anchor to the dock so the strip tracks the
-    -- chat's position; parent stays UIParent so visibility is independent.
-    local dock = (addon.Window and addon.Window.dock) or firstWindow
-    ts:SetPoint("BOTTOMLEFT", dock, "TOPLEFT", 6, 9)
-    if firstWindow.GetFrameLevel then
-        ts:SetFrameLevel(firstWindow:GetFrameLevel() + 20)
-    end
+    -- (which AddTab calls). Anchor to the dock instance's frame so the
+    -- strip tracks the container's position; parent stays UIParent so
+    -- visibility is independent.
+    ts:SetPoint("BOTTOMLEFT", frame, "TOPLEFT", 6, 9)
+    ts:SetFrameLevel((frame:GetFrameLevel() or 5) + 20)
     -- Native template is sized for full chrome frames; 0.8 reads as
     -- "chat-tab sized" against our smaller chat box.
     ts:SetScale(0.8)
     ts:Show()
 
-    -- Tab click: show the clicked window, hide the rest, focus its
-    -- editbox if isUserAction and the tab supports input. Returns
-    -- false so SetTabVisuallySelected still runs.
-    ts:SetTabSelectedCallback(function(tabID, isUserAction)
-        -- Clicking a popped tab in the strip re-docks it: the user
-        -- has clearly chosen this tab as their active view, so pop
-        -- it back into the dock first, then proceed with normal
-        -- show/hide. Without this, clicking a popped tab would hide
-        -- the floating window AND fail to show the docked one
-        -- (because the frame is still popped-out at a remote anchor).
-        if isUserAction and addon.Window and addon.Window.IsPopped
-           and addon.Window:IsPopped(tabID) and addon.Window.PopIn then
-            addon.Window:PopIn(tabID)
-        end
+    ts._dockID = id
+    ts:SetTabSelectedCallback(MakeTabSelectedCallback(id))
 
-        -- Clicking any tab in the dock strip makes the dock the
-        -- active container. PopIn already does this when re-docking
-        -- via tab-click, but we also handle the plain "click another
-        -- dock tab" case here.
-        if isUserAction and addon.Window and addon.Window.SetActiveContainer then
-            addon.Window:SetActiveContainer(nil)
-        end
-        for idx, win in pairs(WindowList()) do
-            -- Popped windows live independently of the dock's active
-            -- tab - they stay shown at their floating position
-            -- regardless of which dock tab is selected.
-            if not (addon.Window and addon.Window.IsPopped and addon.Window:IsPopped(idx)) then
-                local active = idx == tabID
-                win:SetShown(active)
-            end
-            if win.editBox then win.editBox:Hide() end
-        end
+    dockInstance.tabSystem = ts
+    if id == "dock" then self.system = ts end   -- back-compat alias
 
-        -- Instant state-sync for the newly-active window's chrome and
-        -- scrollbar so they don't flash to their old alpha (possibly 0
-        -- in onhover/onscroll mode) before the per-window hover poller
-        -- catches up. SyncWindow is a no-animation alpha set based on
-        -- the current cursor position and mode.
-        if addon.AutoHide and addon.AutoHide.SyncWindow then
-            local newF = WindowList()[tabID]
-            if newF then addon.AutoHide:SyncWindow(newF) end
-        end
-
-        local w     = WindowList()[tabID]
-        local wDB   = WindowDB(tabID)
-        local group = wDB and wDB.eventGroup or "GENERAL"
-        local readOnly  = group == "LOG"
-        local inEditMode = addon.Window and addon.Window.dock
-                           and addon.Window.dock._inEditMode
-
-        if isUserAction and w and w.editBox and not readOnly then
-            -- Re-assert chat type on every tab switch. Defensive against
-            -- Blizzard's chat code occasionally rewriting chatType (e.g.
-            -- after /whisper). Trade tab also re-resolves the channel
-            -- ID in case the player just /joined or left a Trade channel.
-            Tabs:ApplyChatType(w.editBox, group)
-            ChatEdit_ActivateChat(w.editBox)
-        elseif inEditMode and w and w.editBox and not readOnly then
-            -- Edit Mode: keep editbox visible without stealing focus.
-            w.editBox:Show()
-        end
-        return false
-    end)
-
-    self.system = ts
-    self.addBtn = BuildAddButton(ts)
+    dockInstance.addBtn = BuildAddButton(ts, id)
     -- Hover-to-reveal for the "onhover" tabsMode (no-op in always/never).
-    if addon.AutoHide then addon.AutoHide:WireTab(self.addBtn) end
+    if addon.AutoHide then addon.AutoHide:WireTab(dockInstance.addBtn) end
 
     return ts
+end
+
+-- Back-compat: existing call sites pass a window frame and expect a
+-- strip back. We resolve to the main dock instance and route through
+-- EnsureFor. Brand-new code should call EnsureFor(dockInstance) directly.
+function Tabs:Ensure(firstWindow)
+    local Wins = addon.Window
+    local inst = Wins and Wins:CreateDockInstance("dock")
+    return self:EnsureFor(inst)
 end
 
 ---------------------------------------------------------------------------
@@ -444,13 +638,71 @@ end
 ---------------------------------------------------------------------------
 
 function Tabs:AddFor(window, index, label)
-    local ts = self:Ensure(window)
+    -- Resolve which dock instance this window belongs to via its
+    -- profile dockID. CreateDockInstance is idempotent - if the
+    -- container already exists we get the cached one.
+    local dockID = DockIDForWindow(index)
+    local Wins   = addon.Window
+    local inst   = Wins and Wins:CreateDockInstance(dockID)
+    local ts     = self:EnsureFor(inst)
     if not ts then return nil end
 
-    local tabID = ts:AddTab(label or "Chat")
-    if index == 1 then ts:SetTab(tabID) end
+    -- If this strip already has a tab button for this window
+    -- (eg the user is yo-yoing pop in / pop out), reveal the existing
+    -- one instead of duplicating. The tab's _windowIdx back-reference
+    -- is the source of truth.
+    if ts.tabs then
+        for tID, tab in ipairs(ts.tabs) do
+            if tab._windowIdx == index then
+                if not tab:IsShown() then
+                    tab:Show()
+                    if ts.MarkDirty then ts:MarkDirty() end
+                end
+                if label and tab.Init then tab:Init(tID, label) end
+                -- First-tab-on-strip activation rule: if this is the
+                -- ONLY visible tab on the strip after revealing it,
+                -- make it the selected tab.
+                local visibleCount = 0
+                for _, t in ipairs(ts.tabs) do
+                    if t:IsShown() then visibleCount = visibleCount + 1 end
+                end
+                if visibleCount == 1 and ts.SetTab then
+                    ts:SetTab(tID, false)
+                end
+                return tID
+            end
+        end
+    end
 
+    local tabID = ts:AddTab(label or "Chat")
+    -- Authoritative back-reference: a strip's tabIDs are sequential
+    -- per-strip (1, 2, 3, ...) so on a popped strip with two tabs the
+    -- IDs don't match the underlying window indices. Always store the
+    -- window idx on the tab so callbacks / lookups can resolve it.
     local tab = ts.tabs and ts.tabs[tabID]
+    if tab then
+        tab._windowIdx = index
+        -- Defensive Show: AddTab usually creates the tab visible, but
+        -- the layout pass that places it in the strip can land late
+        -- enough that the tab button shows up at the strip's origin
+        -- (0, 0) until the next /reload. Forcing Show + MarkDirty
+        -- below pushes the layout to recompute this frame.
+        tab:Show()
+    end
+
+    -- Activate the first visible tab on the strip so a chat window
+    -- is shown out of the gate. Applies to the main dock (window 1)
+    -- and to every popped strip's first tab.
+    if tab then
+        local visibleCount = 0
+        for _, t in ipairs(ts.tabs) do
+            if t:IsShown() then visibleCount = visibleCount + 1 end
+        end
+        if visibleCount == 1 and ts.SetTab then
+            ts:SetTab(tabID, false)
+        end
+    end
+
     if tab and addon.TabDrag then
         addon.TabDrag:Setup(tab, tabID, ts)
     end
@@ -474,6 +726,15 @@ function Tabs:AddFor(window, index, label)
         end)
     end
 
+    -- TabSystem's MarkDirty triggers HorizontalLayoutFrame's recompute
+    -- on the next OnUpdate. AddTab calls it internally during ordinary
+    -- creation, but the path via Tabs:CreateNewTab -> Window:Create ->
+    -- Tabs:AddFor sometimes lands a frame past the layout pass and the
+    -- tab button is registered without being placed. Forcing MarkDirty
+    -- here guarantees the strip re-lays out and the new tab appears
+    -- immediately rather than waiting for the next /reload.
+    if ts.MarkDirty then ts:MarkDirty() end
+
     return tabID
 end
 
@@ -489,20 +750,23 @@ end
 -- until the user picks what they want via the channel popup.
 ---------------------------------------------------------------------------
 
-function Tabs:CreateNewTab(label)
+function Tabs:CreateNewTab(label, dockID)
+    dockID = dockID or "dock"
     local p = (addon.db and addon.db.profile)
         or (addon.core and addon.core.db and addon.core.db.profile)
     if not p then return nil end
     p.windows = p.windows or {}
 
-    -- Refuse if there's no room. Sum the ACTUAL widths of currently-
-    -- visible tabs (tabs render between minTabWidth and maxTabWidth
-    -- based on label length, so projecting minTabWidth × count under-
-    -- estimates real usage). Add minTabWidth for the projected new tab,
-    -- plus 40 px for the "+" button slot (32 px button + 8 px gap).
-    -- Multiply by the strip's scale to get screen pixels and compare
-    -- against the dock's width.
-    local ts = self.system
+    -- Refuse if there's no room ON THE TARGET STRIP. Sum the ACTUAL
+    -- widths of currently-visible tabs in that strip (tabs render
+    -- between minTabWidth and maxTabWidth based on label length, so
+    -- projecting minTabWidth × count under-estimates real usage). Add
+    -- minTabWidth for the projected new tab, plus 40 px for the "+"
+    -- button slot. Multiply by the strip's scale to get screen pixels
+    -- and compare against the container's width.
+    local Wins = addon.Window
+    local inst = Wins and Wins.docks and Wins.docks[dockID]
+    local ts   = inst and inst.tabSystem
     if ts and ts.tabs then
         local stripW = 0
         for _, t in ipairs(ts.tabs) do
@@ -511,10 +775,9 @@ function Tabs:CreateNewTab(label)
         local newTabW = ts.minTabWidth or 60
         local addBtn  = 40
         local scale   = ts:GetScale() or 1
-        local dock    = addon.Window and addon.Window.dock
-        local dockW   = dock and dock:GetWidth() or 440
+        local containerW = (inst and inst.frame and inst.frame:GetWidth()) or 440
         local projectedScreen = (stripW + newTabW + addBtn) * scale
-        if projectedScreen > dockW then
+        if projectedScreen > containerW then
             return nil, "tab strip is full at this chat width - delete a tab first"
         end
     end
@@ -526,12 +789,15 @@ function Tabs:CreateNewTab(label)
 
     p.windows[nextIdx] = {
         label    = label or "New Tab",
+        dockID   = dockID,
         channels = addon.Channels and addon.Channels:DefaultsFor("BLANK") or {},
     }
 
-    -- Instantiate the chat frame + tab button live (no /reload).
-    if addon.Window and addon.Window.Create then
-        addon.Window:Create(nextIdx, { label = p.windows[nextIdx].label })
+    -- Instantiate the chat frame + tab button live (no /reload). The
+    -- chat frame anchors to dockID's container automatically because
+    -- Window:Create reads windows[idx].dockID.
+    if Wins and Wins.Create then
+        Wins:Create(nextIdx, { label = p.windows[nextIdx].label })
     end
 
     return nextIdx
@@ -571,18 +837,32 @@ function Tabs:ResetTabsToDefaults()
             "alpha", "bgAlpha", "bgMode", "tabsAlpha", "chromeFadeMode",
             "scale", "scrollbarMode", "tabsMode", "fading", "fadeDuration",
             "timeVisible", "maxLines", "indentedWordWrap",
-            "width", "height", "pos",
         }) do
             preserve[key] = p.windows[1][key]
         end
+        preserve.dockID = "dock"
+    end
+    -- Preserve the main dock's geometry so the dock doesn't snap to
+    -- the default corner just because the user reset tabs.
+    local dockGeom
+    if p.docks and p.docks.dock then
+        dockGeom = {
+            pos    = p.docks.dock.pos,
+            width  = p.docks.dock.width,
+            height = p.docks.dock.height,
+        }
     end
     p.windows = nil
     p.deletedCanonicals = nil
     p.tabOrder = nil
+    p.docks = nil
 
-    -- Re-stamp window 1's chrome settings so CreateAll's migration
-    -- doesn't overwrite them with raw defaults.
+    -- Re-stamp window 1's chrome settings + the dock's geometry so
+    -- CreateAll's migration doesn't overwrite them with raw defaults.
     p.windows = { [1] = preserve }
+    if dockGeom then
+        p.docks = { dock = dockGeom }
+    end
 
     return true
 end
@@ -603,14 +883,27 @@ function Tabs:DeleteTab(idx)
     local list = (addon.Window and addon.Window.list) or {}
     local f = list[idx]
     if f then f:Hide() end
-    if self.system and self.system.tabs and self.system.tabs[idx] then
-        self.system.tabs[idx]:Hide()
-        if self.system.MarkDirty then self.system:MarkDirty() end
-    end
-
-    -- If the deleted tab was the active one, fall back to General.
-    if self.system and self.system.selectedTabID == idx then
-        self.system:SetTab(1, false)
+    -- Find the tab on whatever strip is hosting it (main dock or a
+    -- popped container) and hide it there.
+    local tab, strip, tabID = self:GetTabFor(idx)
+    if tab then
+        tab:Hide()
+        -- Sever the back-reference so UpdateVisibility / GetTabFor
+        -- can't find this orphan tab again. Without this, the next
+        -- UpdateVisibility pass would re-show the tab because the
+        -- profile entry is gone and ShouldShowTab(nil) returns true.
+        tab._windowIdx = nil
+        if strip and strip.MarkDirty then strip:MarkDirty() end
+        -- If the deleted tab was the active one on its strip, fall
+        -- back to the strip's first remaining tab.
+        if strip and strip.selectedTabID == tabID then
+            for i = 1, #(strip.tabs or {}) do
+                if strip.tabs[i]:IsShown() and i ~= tabID then
+                    strip:SetTab(i, false)
+                    break
+                end
+            end
+        end
     end
 
     -- Wipe the DB entry. From this point any code reading

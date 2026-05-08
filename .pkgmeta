@@ -1,0 +1,6 @@
+package-as: BazChat
+ignore:
+  - .git
+  - .gitignore
+  - .pkgmeta
+  - LICENSE

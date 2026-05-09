@@ -1,5 +1,17 @@
 # BazChat Changelog
 
+## 002 — Stop the chat-event taint spam
+
+Midnight's Blizzard chat code added a `HistoryKeeper` that holds
+forbidden tables. Reading them while the call context is attributed
+to an addon throws `attempted to index a table that cannot be
+accessed while tainted`, which fired on every monster yell / chat
+event we listened to.
+
+Wraps the chat frame's `OnEvent` dispatch in `securecallfunction`
+so BazChat's call attribution doesn't leak into Blizzard's downstream
+secure work (`ChatHistory_GetAccessID`, `RemoveExtraSpaces`, etc.).
+
 ## 001 — Initial release
 
 A modern chat replacement for the Baz Suite. Owns its chat windows

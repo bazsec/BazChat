@@ -1021,15 +1021,19 @@ function Window:Create(index, opts)
         f.clickAnywhereButton:Show()
     end
 
-    -- Wire mixin methods to actual scripts. OnEvent goes DIRECTLY to
-    -- the mixin method - we don't wrap it with addon Lua code because
-    -- doing so put OUR closure in the call stack, which the engine
-    -- treats as taint and contaminates Blizzard's downstream secure
-    -- operations (RemoveExtraSpaces, ChatHistory_GetAccessID, etc.).
-    -- Channel-list maintenance now happens via a registered message
-    -- filter (Blizzard wraps those in securecallfunction) - see
-    -- InstallChannelListFilter below, called once per session.
-    f:SetScript("OnEvent", f.OnEvent)
+    -- Wire mixin methods to actual scripts. SetScript itself attributes
+    -- the script to BazChat - so when WoW dispatches OnEvent the
+    -- execution context is "tainted by BazChat" the moment our handler
+    -- runs, even though our handler is a direct reference to the mixin
+    -- method (no wrapper). Midnight's HistoryKeeper has forbidden
+    -- tables that throw on tainted access, which our taint contaminates.
+    -- securecallfunction wraps the dispatch in an isolated context
+    -- where the prior addon attribution doesn't propagate into the
+    -- mixin's secure work (ChatHistory_GetAccessID, RemoveExtraSpaces,
+    -- etc.) or back out of it.
+    f:SetScript("OnEvent", function(self, event, ...)
+        securecallfunction(self.OnEvent, self, event, ...)
+    end)
     InstallChannelListFilter()
     HookHyperlinks(f)
     HookMouseWheel(f)

@@ -18,10 +18,13 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      # CurseForge upload is handled by CF's webhook auto-packager
+      # (configured at the repo level). The -d flag below skips the
+      # CF upload so we don't double-publish; the GitHub Release is
+      # still created as a backup artifact.
       - name: Package and release
         uses: BigWigsMods/packager@v2
         with:
-          args: -g retail
+          args: -g retail -d
         env:
-          CF_API_KEY: ${{ secrets.CF_API_KEY }}
           GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
